@@ -86,18 +86,18 @@ async function callOpenAI(reports) {
     })),
   }));
 
-  const prompt = `You are a server security analyst. Below are server monitoring reports from the last hour (one per 5-minute interval). Analyze the trend and current state, then respond with JSON only.
+  const prompt = `Du bist ein Server-Sicherheitsanalyst. Unten stehen Server-Monitoring-Reports der letzten Stunde (je ein Lauf pro 5-Minuten-Intervall). Analysiere den Trend und den aktuellen Zustand und antworte ausschließlich mit JSON.
 
-Reports (${reports.length} runs in the last hour):
+Reports (${reports.length} Läufe in der letzten Stunde):
 ${JSON.stringify(summary, null, 2)}
 
-Respond ONLY with this JSON schema — no markdown, no extra text:
+Antworte NUR mit diesem JSON-Schema — kein Markdown, kein zusätzlicher Text, alle Textwerte auf Deutsch:
 {
   "risk": "low|medium|high|critical",
-  "summary": "One sentence summary of the overall situation in the last hour",
-  "likely_cause": "Most probable cause if issues exist, or 'No issues detected'",
+  "summary": "Ein Satz zur Gesamtsituation der letzten Stunde",
+  "likely_cause": "Wahrscheinlichste Ursache bei Problemen, oder 'Keine Auffälligkeiten festgestellt'",
   "trend": "stable|improving|worsening",
-  "recommended_actions": ["Action 1", "Action 2"],
+  "recommended_actions": ["Maßnahme 1", "Maßnahme 2"],
   "notify": true,
   "urgency": "normal|urgent"
 }`;
@@ -113,7 +113,7 @@ Respond ONLY with this JSON schema — no markdown, no extra text:
       temperature: 0.2,
       max_tokens: 600,
       messages: [
-        { role: 'system', content: 'You are a server security analyst. Respond ONLY with valid JSON.' },
+        { role: 'system', content: 'Du bist ein Server-Sicherheitsanalyst. Antworte NUR mit validem JSON. Alle Textwerte auf Deutsch.' },
         { role: 'user', content: prompt },
       ],
     }),
