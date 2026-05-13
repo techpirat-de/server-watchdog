@@ -42,7 +42,7 @@ async function getLastHourReports() {
   const [rows] = await conn.execute(
     `SELECT id, timestamp, hostname, overall_risk, checks, ai_review
      FROM reports
-     WHERE timestamp >= NOW() - INTERVAL 1 HOUR
+     WHERE timestamp >= UTC_TIMESTAMP() - INTERVAL 1 HOUR
      ORDER BY timestamp ASC`
   );
 
