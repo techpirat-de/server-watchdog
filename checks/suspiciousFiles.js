@@ -27,6 +27,15 @@ const SUSPICIOUS_PATTERNS = [
 
 const RISK_RANK = { low: 0, medium: 1, high: 2, critical: 3 };
 
+function buildExcludeList() {
+  const raw = process.env.SUSPICIOUS_FILES_EXCLUDE || '';
+  return raw.split(',').map((s) => s.trim()).filter(Boolean);
+}
+
+function isExcluded(filePath, excludeList) {
+  return excludeList.some((pattern) => filePath.includes(pattern));
+}
+
 async function findRecentPhpFiles(vhostsPath, hours) {
   try {
     const { stdout } = await execFileAsync('find', [
@@ -121,8 +130,15 @@ async function check(config) {
   }
 
   try {
-    const files = await findRecentPhpFiles(vhostsPath, config.RECENT_FILE_HOURS);
+    const excludeList = buildExcludeList();
+    const allFiles = await findRecentPhpFiles(vhostsPath, config.RECENT_FILE_HOURS);
+    const files = excludeList.length
+      ? allFiles.filter((f) => !isExcluded(f, excludeList))
+      : allFiles;
+
+    const excluded = allFiles.length - files.length;
     result.metrics.scanned = files.length;
+    if (excluded > 0) result.metrics.excluded = excluded;
 
     const scans = await Promise.all(files.map(scanFile));
 
