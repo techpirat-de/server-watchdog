@@ -1,8 +1,6 @@
 'use strict';
 
 require('dotenv').config();
-const fs = require('fs');
-const path = require('path');
 const os = require('os');
 
 const mailQueue = require('./checks/mailQueue');
@@ -12,6 +10,7 @@ const serverLoad = require('./checks/serverLoad');
 const aiReview = require('./checks/aiReview');
 const emailNotifier = require('./notifiers/emailNotifier');
 const telegramNotifier = require('./notifiers/telegramNotifier');
+const db = require('./lib/db');
 
 const RISK_RANK = { low: 0, medium: 1, high: 2, critical: 3 };
 
@@ -47,60 +46,9 @@ function computeOverallRisk(checks) {
   return highest;
 }
 
-function shouldNotify(overallRisk, config) {
+function shouldNotify(overallRisk) {
   if (config.ALWAYS_SEND_REPORT === 'true') return true;
   return RISK_RANK[overallRisk] >= RISK_RANK['medium'];
-}
-
-function saveReport(report) {
-  const dir = path.join(__dirname, 'reports');
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-
-  const now = new Date(report.timestamp);
-  const pad = (n) => String(n).padStart(2, '0');
-  const fname = `report-${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}-${pad(now.getHours())}-${pad(now.getMinutes())}`;
-
-  const jsonPath = path.join(dir, `${fname}.json`);
-  fs.writeFileSync(jsonPath, JSON.stringify(report, null, 2), 'utf8');
-  console.log(`[monitor] Report saved: ${jsonPath}`);
-
-  return jsonPath;
-}
-
-function saveTxtReport(report) {
-  const dir = path.join(__dirname, 'reports');
-  const now = new Date(report.timestamp);
-  const pad = (n) => String(n).padStart(2, '0');
-  const fname = `report-${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}-${pad(now.getHours())}-${pad(now.getMinutes())}.txt`;
-
-  const lines = [
-    `Server Watchdog Report`,
-    `======================`,
-    `Hostname   : ${report.hostname}`,
-    `Timestamp  : ${report.timestamp}`,
-    `Risk Level : ${report.overallRisk.toUpperCase()}`,
-    '',
-  ];
-
-  for (const c of report.checks) {
-    lines.push(`[${c.name.toUpperCase()}] status=${c.status}  risk=${c.risk}`);
-    for (const f of c.findings) {
-      lines.push(`  • ${f.message || f.type || JSON.stringify(f)}`);
-    }
-    if (c.metrics && Object.keys(c.metrics).length) {
-      lines.push(`  Metrics: ${JSON.stringify(c.metrics)}`);
-    }
-    lines.push('');
-  }
-
-  if (report.aiReview?.response) {
-    lines.push('AI Assessment:');
-    lines.push(JSON.stringify(report.aiReview.response, null, 2));
-  }
-
-  const txtPath = path.join(dir, fname);
-  fs.writeFileSync(txtPath, lines.join('\n'), 'utf8');
-  console.log(`[monitor] Text report saved: ${txtPath}`);
 }
 
 async function runCheck(name, fn, ...args) {
@@ -136,12 +84,11 @@ async function main() {
     notificationsSent: [],
   };
 
-  // AI review runs after initial checks (needs the report)
   const ai = await runCheck('aiReview', aiReview.check, report, config);
   report.aiReview = ai;
   if (ai.response?.risk) report.overallRisk = ai.response.risk;
 
-  // Print console summary
+  // Console summary
   console.log('\n[monitor] ===== RESULTS =====');
   console.log(`[monitor] Overall Risk: ${report.overallRisk.toUpperCase()}`);
   for (const c of checks) {
@@ -152,14 +99,19 @@ async function main() {
     }
   }
 
-  // Save reports
-  saveReport(report);
-  saveTxtReport(report);
+  // Save to MySQL
+  try {
+    const id = await db.saveReport(report);
+    console.log(`[monitor] Report saved to MySQL (id=${id})`);
+  } catch (err) {
+    console.error(`[monitor] Failed to save report to MySQL: ${err.message}`);
+  } finally {
+    await db.closePool();
+  }
 
-  // Send notifications
-  if (shouldNotify(report.overallRisk, config)) {
+  // Notifications
+  if (shouldNotify(report.overallRisk)) {
     console.log('[monitor] Sending notifications...');
-
     for (const [name, notifier] of [['email', emailNotifier], ['telegram', telegramNotifier]]) {
       try {
         await notifier.send(report, config);

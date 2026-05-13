@@ -1,16 +1,22 @@
 {
   "name": "server-watchdog",
-  "version": "1.0.0",
-  "description": "Server monitoring tool for Debian/Plesk: mail queue, suspicious files, server load, AI review",
+  "version": "2.0.0",
+  "description": "Server monitoring tool for Debian/Plesk: mail queue, suspicious files, server load, AI review, web dashboard",
   "main": "monitor.js",
   "scripts": {
     "start": "node monitor.js",
+    "web": "node web/server.js",
+    "setup-db": "node setup-db.js",
     "test": "node monitor.js --dry-run"
   },
   "dependencies": {
+    "basic-auth": "^2.0.1",
     "dotenv": "^16.4.5",
-    "nodemailer": "^6.9.14",
-    "node-fetch": "^3.3.2"
+    "express": "^4.19.2",
+    "express-basic-auth": "^1.2.1",
+    "mysql2": "^3.11.3",
+    "node-fetch": "^3.3.2",
+    "nodemailer": "^6.9.14"
   },
   "engines": {
     "node": ">=18.0.0"

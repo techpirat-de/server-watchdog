@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Server Watchdog</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <div class="header-inner">
+      <div class="logo">
+        <span class="logo-icon">&#9760;</span>
+        <span>Server Watchdog</span>
+      </div>
+      <div id="header-meta" class="header-meta">
+        <span id="hostname">–</span>
+        <span class="sep">·</span>
+        <span id="last-run">Lade...</span>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <!-- Stats row -->
+    <section class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-label">Gesamt-Läufe</div>
+        <div class="stat-value" id="stat-total">–</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Aktuelles Risiko</div>
+        <div class="stat-value" id="stat-risk"><span class="badge badge-low">–</span></div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Critical (gesamt)</div>
+        <div class="stat-value critical" id="stat-critical">–</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">High (gesamt)</div>
+        <div class="stat-value high" id="stat-high">–</div>
+      </div>
+    </section>
+
+    <!-- Latest check cards -->
+    <section>
+      <h2 class="section-title">Letzter Lauf — Checks</h2>
+      <div class="checks-grid" id="checks-grid">
+        <div class="check-card skeleton"></div>
+        <div class="check-card skeleton"></div>
+        <div class="check-card skeleton"></div>
+        <div class="check-card skeleton"></div>
+      </div>
+    </section>
+
+    <!-- AI review -->
+    <section id="ai-section" style="display:none">
+      <h2 class="section-title">KI-Bewertung</h2>
+      <div class="ai-card" id="ai-card"></div>
+    </section>
+
+    <!-- History table -->
+    <section>
+      <div class="section-header">
+        <h2 class="section-title">Verlauf</h2>
+        <div class="filter-group">
+          <label>Filter:
+            <select id="risk-filter">
+              <option value="">Alle</option>
+              <option value="critical">Critical</option>
+              <option value="high">High</option>
+              <option value="medium">Medium</option>
+              <option value="low">Low</option>
+            </select>
+          </label>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table id="history-table">
+          <thead>
+            <tr>
+              <th>Zeitpunkt</th>
+              <th>Host</th>
+              <th>Risiko</th>
+              <th>Checks mit Findings</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="history-body">
+            <tr><td colspan="5" class="loading-row">Lade...</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="pagination">
+        <button id="btn-prev" disabled>&#8592; Zurück</button>
+        <span id="page-info">Seite 1</span>
+        <button id="btn-next">Weiter &#8594;</button>
+      </div>
+    </section>
+  </main>
+
+  <!-- Detail Modal -->
+  <div id="modal-overlay" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="modal-title">Report Detail</h3>
+        <button class="modal-close" id="modal-close">&times;</button>
+      </div>
+      <div class="modal-body" id="modal-body"></div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
