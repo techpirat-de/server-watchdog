@@ -323,6 +323,8 @@ button:disabled { opacity: .4; cursor: default; }
 .btn-notify:disabled { opacity: .45; cursor: default; }
 .btn-notify.btn-run { border-color: var(--accent); color: var(--accent); }
 .btn-notify.btn-run:hover:not(:disabled) { background: #5b6af022; }
+.btn-notify.btn-ai { border-color: #a855f7; color: #a855f7; }
+.btn-notify.btn-ai:hover:not(:disabled) { background: #a855f722; }
 .btn-notify.loading { opacity: .6; }
 .notify-icon { font-size: 15px; }
 .notify-result {

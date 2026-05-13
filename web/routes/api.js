@@ -76,6 +76,35 @@ router.get('/cron-status', async (req, res) => {
   }
 });
 
+router.post('/test-ai', async (req, res) => {
+  const { execFile } = require('child_process');
+  const path = require('path');
+  const aiPath  = path.join(__dirname, '../../ai-review.js');
+  const nodeBin = process.execPath;
+
+  if (global._aiRunning) {
+    return res.status(409).json({ error: 'KI-Analyse läuft bereits — bitte warten.' });
+  }
+  global._aiRunning = true;
+
+  execFile(nodeBin, [aiPath], { timeout: 60000, cwd: path.join(__dirname, '../..') }, async (err, stdout, stderr) => {
+    global._aiRunning = false;
+    const output = (stdout + stderr).trim();
+
+    if (err && err.code !== 0) {
+      return res.status(500).json({ error: err.message, output: output.slice(-800) });
+    }
+
+    // After ai-review.js ran, fetch the latest report with AI result from DB
+    try {
+      const latest = await db.getLatestReport();
+      res.json({ ok: true, output: output.slice(-800), aiReview: latest?.ai_review || null });
+    } catch (_) {
+      res.json({ ok: true, output: output.slice(-800), aiReview: null });
+    }
+  });
+});
+
 router.post('/run-now', async (req, res) => {
   const { execFile } = require('child_process');
   const path = require('path');

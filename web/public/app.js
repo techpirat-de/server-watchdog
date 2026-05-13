@@ -259,6 +259,72 @@ document.getElementById('btn-refresh-status').addEventListener('click', loadCron
 
 // ── Sofort-Check ─────────────────────────────────────────────────────────────
 
+document.getElementById('btn-test-ai').addEventListener('click', async () => {
+  const btn    = document.getElementById('btn-test-ai');
+  const result = document.getElementById('run-result');
+  const section = document.getElementById('ai-test-section');
+  const card   = document.getElementById('ai-test-card');
+
+  btn.disabled = true;
+  btn.innerHTML = '<span class="notify-icon">⏳</span> KI analysiert...';
+  result.className = 'notify-result info';
+  result.textContent = 'KI-Analyse läuft — kann bis zu 30s dauern...';
+  section.style.display = 'none';
+
+  try {
+    const data = await fetch('/api/test-ai', { method: 'POST' }).then((r) => r.json());
+    if (data.error) throw new Error(data.error);
+
+    result.className = 'notify-result success';
+    result.textContent = 'KI-Analyse abgeschlossen ✓';
+
+    const ai = data.aiReview?.response || data.aiReview;
+    if (ai) {
+      section.style.display = '';
+      const actionsHtml = Array.isArray(ai.recommended_actions)
+        ? `<ul class="ai-actions">${ai.recommended_actions.map((a) => `<li>${escHtml(a)}</li>`).join('')}</ul>`
+        : escHtml(ai.recommended_actions || '–');
+
+      card.innerHTML = `
+        <div>
+          <div class="ai-field-label">Risiko</div>
+          <div class="ai-field-value">${RISK_BADGE[ai.risk] || escHtml(ai.risk || '–')}</div>
+        </div>
+        <div>
+          <div class="ai-field-label">Trend</div>
+          <div class="ai-field-value">${escHtml(ai.trend || '–')}</div>
+        </div>
+        <div>
+          <div class="ai-field-label">Zusammenfassung</div>
+          <div class="ai-field-value">${escHtml(ai.summary || '–')}</div>
+        </div>
+        <div>
+          <div class="ai-field-label">Wahrscheinliche Ursache</div>
+          <div class="ai-field-value">${escHtml(ai.likely_cause || '–')}</div>
+        </div>
+        <div>
+          <div class="ai-field-label">Benachrichtigung</div>
+          <div class="ai-field-value">${ai.notify ? '✓ Ja' : '✗ Nein'} · Dringlichkeit: ${escHtml(ai.urgency || '–')}</div>
+        </div>
+        <div>
+          <div class="ai-field-label">Empfehlungen</div>
+          <div class="ai-field-value">${actionsHtml}</div>
+        </div>`;
+    } else {
+      result.textContent = 'KI-Analyse abgeschlossen — kein Ergebnis (Risiko zu niedrig oder kein Report vorhanden)';
+    }
+
+    // Refresh dashboard to show updated AI section
+    loadDashboard();
+  } catch (err) {
+    result.className = 'notify-result error';
+    result.textContent = 'Fehler: ' + err.message;
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<span class="notify-icon">&#129504;</span> KI-Analyse starten';
+  }
+});
+
 document.getElementById('btn-run-now').addEventListener('click', async () => {
   const btn = document.getElementById('btn-run-now');
   const result = document.getElementById('run-result');
