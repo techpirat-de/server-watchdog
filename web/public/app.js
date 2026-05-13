@@ -218,6 +218,45 @@ document.getElementById('btn-next').addEventListener('click', () => {
   loadHistory();
 });
 
+// ── Cron status ───────────────────────────────────────────────────────────────
+
+async function loadCronStatus() {
+  const dot  = document.getElementById('cron-dot');
+  const text = document.getElementById('cron-status-text');
+  const meta = document.getElementById('cron-meta');
+
+  try {
+    const d = await api('/cron-status');
+    dot.className = 'cron-indicator ' + d.status;
+
+    if (d.status === 'no_data') {
+      text.textContent = 'Noch kein Report empfangen';
+      meta.textContent = 'Cron-Job wurde noch nicht ausgeführt oder schreibt nicht in die Datenbank.';
+      return;
+    }
+
+    const ago = d.minutesAgo === 0 ? 'gerade eben'
+              : d.minutesAgo === 1 ? 'vor 1 Minute'
+              : `vor ${d.minutesAgo} Minuten`;
+
+    if (d.status === 'ok') {
+      text.textContent = `Cron läuft ✓ — letzter Lauf ${ago}`;
+    } else if (d.status === 'late') {
+      text.textContent = `Cron verzögert ⚠ — letzter Lauf ${ago}`;
+    } else {
+      text.textContent = `Cron ausgefallen ✗ — letzter Lauf ${ago}`;
+    }
+
+    meta.textContent = `Intervall: alle ${d.intervalMinutes} min · Gesamt-Läufe: ${d.stats?.total_runs ?? '–'} · Letztes Risiko: ${d.overallRisk?.toUpperCase() ?? '–'}`;
+  } catch (err) {
+    dot.className = 'cron-indicator missed';
+    text.textContent = 'Status nicht abrufbar';
+    meta.textContent = err.message;
+  }
+}
+
+document.getElementById('btn-refresh-status').addEventListener('click', loadCronStatus);
+
 // ── Sofort-Check ─────────────────────────────────────────────────────────────
 
 document.getElementById('btn-run-now').addEventListener('click', async () => {
@@ -281,5 +320,6 @@ document.getElementById('btn-test-email').addEventListener('click', () => testNo
 document.getElementById('btn-test-telegram').addEventListener('click', () => testNotify('telegram'));
 document.getElementById('btn-test-all').addEventListener('click', () => testNotify('all'));
 
+loadCronStatus();
 loadDashboard();
 loadHistory();

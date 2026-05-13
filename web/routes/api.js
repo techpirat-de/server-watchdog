@@ -48,6 +48,35 @@ router.get('/reports/:id', async (req, res) => {
   }
 });
 
+router.get('/cron-status', async (req, res) => {
+  try {
+    const latest = await db.getLatestReport();
+    const stats  = await db.getStats();
+    const now    = Date.now();
+    const intervalMinutes = parseInt(process.env.CHECK_INTERVAL_MINUTES, 10) || 60;
+
+    if (!latest) {
+      return res.json({ status: 'no_data', message: 'Noch kein Report in der Datenbank', intervalMinutes, stats });
+    }
+
+    const lastRun      = new Date(latest.timestamp).getTime();
+    const minutesAgo   = Math.round((now - lastRun) / 60000);
+    const isLate       = minutesAgo > intervalMinutes * 2;
+    const isMissed     = minutesAgo > intervalMinutes * 4;
+
+    res.json({
+      status:          isMissed ? 'missed' : isLate ? 'late' : 'ok',
+      lastRun:         latest.timestamp,
+      minutesAgo,
+      intervalMinutes,
+      overallRisk:     latest.overall_risk,
+      stats,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.post('/run-now', async (req, res) => {
   const { execFile } = require('child_process');
   const path = require('path');
