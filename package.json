@@ -1,0 +1,19 @@
+{
+  "name": "server-watchdog",
+  "version": "1.0.0",
+  "description": "Server monitoring tool for Debian/Plesk: mail queue, suspicious files, server load, AI review",
+  "main": "monitor.js",
+  "scripts": {
+    "start": "node monitor.js",
+    "test": "node monitor.js --dry-run"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "nodemailer": "^6.9.14",
+    "node-fetch": "^3.3.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "license": "MIT"
+}
