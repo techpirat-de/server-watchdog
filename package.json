@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node monitor.js",
     "web": "node web/server.js",
+    "ai-review": "node ai-review.js",
     "setup-db": "node setup-db.js",
     "test": "node monitor.js --dry-run"
   },
