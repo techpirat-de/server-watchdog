@@ -338,6 +338,43 @@ button:disabled { opacity: .4; cursor: default; }
 .notify-result.error   { display: inline-block; background: #7f1d1d44; color: var(--high); border: 1px solid #991b1b; }
 .notify-result.info    { display: inline-block; background: #1e3a5f44; color: #60a5fa; border: 1px solid #1e40af; }
 
+/* ── AI log output ── */
+.ai-log {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px 14px;
+  font-family: monospace;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 260px;
+  overflow-y: auto;
+  margin-top: 4px;
+}
+
+/* ── Live / auto-refresh indicator ── */
+.live-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.live-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+  transition: background .3s, box-shadow .3s;
+}
+.live-dot.ping {
+  background: var(--low);
+  box-shadow: 0 0 6px var(--low);
+}
+
 @media (max-width: 640px) {
   .ai-card { grid-template-columns: 1fr; }
   .checks-grid { grid-template-columns: 1fr; }

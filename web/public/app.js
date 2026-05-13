@@ -1,5 +1,36 @@
 'use strict';
 
+// ── Auto-refresh ──────────────────────────────────────────────────────────────
+
+let _lastTimestamp = null;
+let _autoRefreshTimer = null;
+
+function startAutoRefresh(intervalMs = 60_000) {
+  if (_autoRefreshTimer) return;
+  _autoRefreshTimer = setInterval(async () => {
+    try {
+      const latest = await api('/latest').catch(() => null);
+      if (!latest) return;
+      if (_lastTimestamp && latest.timestamp !== _lastTimestamp) {
+        _lastTimestamp = latest.timestamp;
+        loadDashboard();
+        loadHistory();
+        loadCronStatus();
+        showAutoRefreshPing();
+      } else {
+        _lastTimestamp = latest.timestamp;
+      }
+    } catch (_) {}
+  }, intervalMs);
+}
+
+function showAutoRefreshPing() {
+  const el = document.getElementById('auto-refresh-dot');
+  if (!el) return;
+  el.classList.add('ping');
+  setTimeout(() => el.classList.remove('ping'), 1200);
+}
+
 const RISK_BADGE = {
   low:      '<span class="badge badge-low">LOW</span>',
   medium:   '<span class="badge badge-medium">MEDIUM</span>',
@@ -35,6 +66,7 @@ async function loadDashboard() {
   document.getElementById('stat-high').textContent = stats.high_count ?? 0;
 
   if (latest) {
+    _lastTimestamp = latest.timestamp;
     document.getElementById('hostname').textContent = latest.hostname;
     document.getElementById('last-run').textContent = 'Letzter Lauf: ' + fmtDate(latest.timestamp);
     document.getElementById('stat-risk').innerHTML = RISK_BADGE[latest.overall_risk] || latest.overall_risk;
@@ -273,13 +305,12 @@ document.getElementById('btn-test-ai').addEventListener('click', async () => {
 
   try {
     const data = await fetch('/api/test-ai', { method: 'POST' }).then((r) => r.json());
-    if (data.error) throw new Error(data.error);
-
-    result.className = 'notify-result success';
-    result.textContent = 'KI-Analyse abgeschlossen ✓';
+    if (data.error) throw new Error(data.error + (data.output ? `\n\nLog:\n${data.output}` : ''));
 
     const ai = data.aiReview?.response || data.aiReview;
     if (ai) {
+      result.className = 'notify-result success';
+      result.textContent = 'KI-Analyse abgeschlossen ✓';
       section.style.display = '';
       const actionsHtml = Array.isArray(ai.recommended_actions)
         ? `<ul class="ai-actions">${ai.recommended_actions.map((a) => `<li>${escHtml(a)}</li>`).join('')}</ul>`
@@ -309,16 +340,22 @@ document.getElementById('btn-test-ai').addEventListener('click', async () => {
         <div>
           <div class="ai-field-label">Empfehlungen</div>
           <div class="ai-field-value">${actionsHtml}</div>
-        </div>`;
+        </div>
+        ${data.output ? `<div style="grid-column:1/-1"><div class="ai-field-label">Script-Log</div><pre class="ai-log">${escHtml(data.output)}</pre></div>` : ''}`;
     } else {
-      result.textContent = 'KI-Analyse abgeschlossen — kein Ergebnis (Risiko zu niedrig oder kein Report vorhanden)';
+      result.className = 'notify-result info';
+      result.textContent = 'Skript beendet — kein KI-Ergebnis (Details im Log unten)';
+      section.style.display = '';
+      card.innerHTML = data.output
+        ? `<div style="grid-column:1/-1"><div class="ai-field-label">Script-Log</div><pre class="ai-log">${escHtml(data.output)}</pre></div>`
+        : '<div style="grid-column:1/-1;color:var(--muted)">Kein Output — prüfe ENABLE_AI_REVIEW und OPENAI_API_KEY in den Umgebungsvariablen.</div>';
     }
 
     // Refresh dashboard to show updated AI section
     loadDashboard();
   } catch (err) {
     result.className = 'notify-result error';
-    result.textContent = 'Fehler: ' + err.message;
+    result.textContent = 'Fehler: ' + err.message.split('\n')[0];
   } finally {
     btn.disabled = false;
     btn.innerHTML = '<span class="notify-icon">&#129504;</span> KI-Analyse starten';
@@ -389,3 +426,4 @@ document.getElementById('btn-test-all').addEventListener('click', () => testNoti
 loadCronStatus();
 loadDashboard();
 loadHistory();
+startAutoRefresh(60_000);
