@@ -218,5 +218,68 @@ document.getElementById('btn-next').addEventListener('click', () => {
   loadHistory();
 });
 
+// ── Sofort-Check ─────────────────────────────────────────────────────────────
+
+document.getElementById('btn-run-now').addEventListener('click', async () => {
+  const btn = document.getElementById('btn-run-now');
+  const result = document.getElementById('run-result');
+  btn.disabled = true;
+  btn.classList.add('loading');
+  btn.innerHTML = '<span class="notify-icon">⏳</span> Läuft...';
+  result.className = 'notify-result info';
+  result.textContent = 'Check läuft — bitte warten (kann bis zu 60s dauern)...';
+
+  try {
+    const data = await fetch('/api/run-now', { method: 'POST' }).then((r) => r.json());
+    if (data.error) throw new Error(data.error);
+    result.className = 'notify-result success';
+    result.textContent = 'Check abgeschlossen — Dashboard wird aktualisiert...';
+    setTimeout(() => { loadDashboard(); loadHistory(); }, 1500);
+  } catch (err) {
+    result.className = 'notify-result error';
+    result.textContent = 'Fehler: ' + err.message;
+  } finally {
+    btn.disabled = false;
+    btn.classList.remove('loading');
+    btn.innerHTML = '<span class="notify-icon">&#9654;</span> Sofort-Check starten';
+  }
+});
+
+// ── Notification tests ────────────────────────────────────────────────────────
+
+async function testNotify(channel) {
+  const result = document.getElementById('notify-result');
+  const btns = ['btn-test-email', 'btn-test-telegram', 'btn-test-all'].map((id) => document.getElementById(id));
+  btns.forEach((b) => { b.disabled = true; });
+  result.className = 'notify-result info';
+  result.textContent = 'Sende...';
+
+  try {
+    const data = await fetch('/api/test-notify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ channel }),
+    }).then((r) => r.json());
+
+    if (data.error) throw new Error(data.error);
+
+    const parts = Object.entries(data.results).map(([k, v]) =>
+      `${k}: ${v === 'ok' ? '✓' : '✗ ' + v}`
+    );
+    const allOk = Object.values(data.results).every((v) => v === 'ok');
+    result.className = 'notify-result ' + (allOk ? 'success' : 'error');
+    result.textContent = parts.join('  ·  ');
+  } catch (err) {
+    result.className = 'notify-result error';
+    result.textContent = 'Fehler: ' + err.message;
+  } finally {
+    btns.forEach((b) => { b.disabled = false; });
+  }
+}
+
+document.getElementById('btn-test-email').addEventListener('click', () => testNotify('email'));
+document.getElementById('btn-test-telegram').addEventListener('click', () => testNotify('telegram'));
+document.getElementById('btn-test-all').addEventListener('click', () => testNotify('all'));
+
 loadDashboard();
 loadHistory();

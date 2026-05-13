@@ -2,6 +2,8 @@
 
 const { Router } = require('express');
 const db = require('../../lib/db');
+const emailNotifier = require('../../notifiers/emailNotifier');
+const telegramNotifier = require('../../notifiers/telegramNotifier');
 
 const router = Router();
 
@@ -44,6 +46,84 @@ router.get('/reports/:id', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+router.post('/run-now', async (req, res) => {
+  const { execFile } = require('child_process');
+  const path = require('path');
+  const monitorPath = path.join(__dirname, '../../monitor.js');
+  const nodeBin = process.execPath;
+
+  // Prevent parallel runs
+  if (global._monitorRunning) {
+    return res.status(409).json({ error: 'Ein Check läuft bereits — bitte warten.' });
+  }
+  global._monitorRunning = true;
+
+  execFile(nodeBin, [monitorPath], { timeout: 120000, cwd: path.join(__dirname, '../..') }, (err, stdout, stderr) => {
+    global._monitorRunning = false;
+    if (err && err.code !== 0) {
+      return res.status(500).json({ error: err.message, stderr: stderr?.slice(-500) });
+    }
+    res.json({ ok: true, output: (stdout + stderr).slice(-1000) });
+  });
+});
+
+router.post('/test-notify', async (req, res) => {
+  const { channel } = req.body;
+  if (!channel || !['email', 'telegram', 'all'].includes(channel)) {
+    return res.status(400).json({ error: 'channel must be email, telegram or all' });
+  }
+
+  const testReport = {
+    timestamp: new Date().toISOString(),
+    hostname: process.env.SERVER_NAME || require('os').hostname(),
+    overallRisk: 'medium',
+    checks: [{
+      name: 'testNotification',
+      status: 'warning',
+      risk: 'medium',
+      findings: [{ type: 'test', message: 'Dies ist eine Test-Benachrichtigung vom Server Watchdog Dashboard.' }],
+      metrics: {},
+    }],
+    aiReview: null,
+    notificationsSent: [],
+  };
+
+  const config = {
+    ENABLE_EMAIL_NOTIFIER: ['email', 'all'].includes(channel) ? 'true' : 'false',
+    SMTP_HOST: process.env.SMTP_HOST,
+    SMTP_PORT: process.env.SMTP_PORT,
+    SMTP_USER: process.env.SMTP_USER,
+    SMTP_PASS: process.env.SMTP_PASS,
+    ALERT_EMAIL_TO: process.env.ALERT_EMAIL_TO,
+    ALERT_EMAIL_FROM: process.env.ALERT_EMAIL_FROM,
+    ENABLE_TELEGRAM_NOTIFIER: ['telegram', 'all'].includes(channel) ? 'true' : 'false',
+    TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN,
+    TELEGRAM_CHAT_ID: process.env.TELEGRAM_CHAT_ID,
+  };
+
+  const results = {};
+
+  if (['email', 'all'].includes(channel)) {
+    try {
+      await emailNotifier.send(testReport, config);
+      results.email = 'ok';
+    } catch (err) {
+      results.email = `error: ${err.message}`;
+    }
+  }
+
+  if (['telegram', 'all'].includes(channel)) {
+    try {
+      await telegramNotifier.send(testReport, config);
+      results.telegram = 'ok';
+    } catch (err) {
+      results.telegram = `error: ${err.message}`;
+    }
+  }
+
+  res.json({ results });
 });
 
 module.exports = router;

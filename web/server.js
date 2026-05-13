@@ -20,6 +20,7 @@ if (!WEB_USER || !WEB_PASS) {
   process.exit(1);
 }
 
+app.use(express.json());
 app.use(basicAuth({
   users: { [WEB_USER]: WEB_PASS },
   challenge: true,
