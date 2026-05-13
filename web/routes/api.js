@@ -87,7 +87,7 @@ router.post('/test-ai', async (req, res) => {
   }
   global._aiRunning = true;
 
-  execFile(nodeBin, [aiPath], { timeout: 60000, cwd: path.join(__dirname, '../..') }, async (err, stdout, stderr) => {
+  execFile(nodeBin, [aiPath, '--force'], { timeout: 60000, cwd: path.join(__dirname, '../..') }, async (err, stdout, stderr) => {
     global._aiRunning = false;
     const output = (stdout + stderr).trim();
 

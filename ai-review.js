@@ -156,7 +156,8 @@ async function sendNotifications(aiResult, latestReport) {
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
-  console.log(`\n[ai-review] ===== AI Review starting at ${new Date().toISOString()} =====`);
+  const force = process.argv.includes('--force');
+  console.log(`\n[ai-review] ===== AI Review starting at ${new Date().toISOString()} ${force ? '[FORCE]' : ''} =====`);
 
   if (config.ENABLE_AI_REVIEW !== 'true') {
     console.log('[ai-review] ENABLE_AI_REVIEW is not true — exiting');
@@ -182,9 +183,13 @@ async function main() {
 
   console.log(`[ai-review] Worst risk in last hour: ${worstRisk.toUpperCase()}`);
 
-  if (RISK_RANK[worstRisk] < RISK_RANK['medium']) {
+  if (!force && RISK_RANK[worstRisk] < RISK_RANK['medium']) {
     console.log('[ai-review] All reports LOW — no AI call needed, no notification sent');
     process.exit(0);
+  }
+
+  if (force && RISK_RANK[worstRisk] < RISK_RANK['medium']) {
+    console.log('[ai-review] Force mode — running AI analysis despite LOW risk');
   }
 
   // Call AI with all reports from last hour
