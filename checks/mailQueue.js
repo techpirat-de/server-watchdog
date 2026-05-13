@@ -144,7 +144,7 @@ async function check(config) {
     const raw = await getRawQueue();
     if (raw === null) {
       result.status = 'error';
-      result.findings.push({ type: 'exec_error', message: 'Could not run mailq or postqueue -p (not installed or permission denied)' });
+      result.findings.push({ type: 'exec_error', message: 'postqueue/mailq nicht ausführbar — monitor.js muss als root laufen (root-Cronjob einrichten)' });
       return result;
     }
 

@@ -89,7 +89,7 @@ function resolveVhostsPath(configPath) {
     '/home/httpd/vhosts',
     '/var/www/html',
     '/srv/www/vhosts',
-  ];
+  ].filter((v, i, arr) => v && arr.indexOf(v) === i); // deduplicate
   for (const p of candidates) {
     if (!p) continue;
     try {
@@ -112,7 +112,7 @@ async function check(config) {
   const vhostsPath = resolveVhostsPath(config.VHOSTS_PATH);
   if (!vhostsPath) {
     result.status = 'error';
-    result.findings.push({ type: 'path_error', message: `Kein lesbares Vhosts-Verzeichnis gefunden. Geprüft: ${config.VHOSTS_PATH}, /var/www/vhosts, /home/httpd/vhosts. Bitte VHOSTS_PATH in .env anpassen.` });
+    result.findings.push({ type: 'path_error', message: `Kein lesbares Vhosts-Verzeichnis gefunden (Berechtigungsproblem oder falscher Pfad). Bitte monitor.js als root ausführen oder VHOSTS_PATH in .env prüfen.` });
     return result;
   }
 

@@ -24,15 +24,18 @@ function getLinuxMemInfo() {
 }
 
 async function getDiskUsage() {
+  // -P = POSIX portable format, works on all Linux/BSD
   for (const dfBin of ['/bin/df', '/usr/bin/df', 'df']) {
     try {
-      const { stdout } = await execFileAsync(dfBin, ['-BG', '/'], { timeout: 5000 });
-      const line = stdout.split('\n')[1];
+      const { stdout } = await execFileAsync(dfBin, ['-P', '-k', '/'], { timeout: 5000 });
+      // POSIX output: Filesystem 1024-blocks Used Available Capacity% Mounted
+      const line = stdout.split('\n').find((l) => l.match(/\s+\d+\s+\d+\s+\d+\s+\d+%/));
       if (!line) continue;
       const parts = line.trim().split(/\s+/);
-      const usedPct = parseInt(parts[4], 10);
-      const available = parseInt(parts[3], 10);
-      if (!isNaN(usedPct)) return { usedPercent: usedPct, availableGB: available };
+      const usedPct  = parseInt(parts[4], 10);       // "79%"
+      const availKB  = parseInt(parts[3], 10);
+      const availGB  = Math.round(availKB / 1024 / 1024 * 10) / 10;
+      if (!isNaN(usedPct)) return { usedPercent: usedPct, availableGB: availGB };
     } catch (_) {}
   }
   return null;
