@@ -82,6 +82,24 @@ async function scanFile(filePath) {
   return { filePath, findings, risk: highestRisk };
 }
 
+function resolveVhostsPath(configPath) {
+  const candidates = [
+    configPath,
+    '/var/www/vhosts',
+    '/home/httpd/vhosts',
+    '/var/www/html',
+    '/srv/www/vhosts',
+  ];
+  for (const p of candidates) {
+    if (!p) continue;
+    try {
+      fs.accessSync(p, fs.constants.R_OK);
+      return p;
+    } catch (_) {}
+  }
+  return null;
+}
+
 async function check(config) {
   const result = {
     name: 'suspiciousFiles',
@@ -91,14 +109,19 @@ async function check(config) {
     metrics: { scanned: 0, flagged: 0, critical: 0, high: 0, medium: 0 },
   };
 
-  if (!fs.existsSync(config.VHOSTS_PATH)) {
+  const vhostsPath = resolveVhostsPath(config.VHOSTS_PATH);
+  if (!vhostsPath) {
     result.status = 'error';
-    result.findings.push({ type: 'path_error', message: `VHOSTS_PATH does not exist: ${config.VHOSTS_PATH}` });
+    result.findings.push({ type: 'path_error', message: `Kein lesbares Vhosts-Verzeichnis gefunden. Geprüft: ${config.VHOSTS_PATH}, /var/www/vhosts, /home/httpd/vhosts. Bitte VHOSTS_PATH in .env anpassen.` });
     return result;
   }
 
+  if (vhostsPath !== config.VHOSTS_PATH) {
+    result.findings.push({ type: 'path_info', message: `VHOSTS_PATH auf ${vhostsPath} korrigiert (konfiguriert: ${config.VHOSTS_PATH})` });
+  }
+
   try {
-    const files = await findRecentPhpFiles(config.VHOSTS_PATH, config.RECENT_FILE_HOURS);
+    const files = await findRecentPhpFiles(vhostsPath, config.RECENT_FILE_HOURS);
     result.metrics.scanned = files.length;
 
     const scans = await Promise.all(files.map(scanFile));

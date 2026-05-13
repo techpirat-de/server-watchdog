@@ -13,13 +13,19 @@ const ERROR_PATTERNS = [
 ];
 
 async function getRawQueue() {
-  for (const cmd of [['postqueue', ['-p']], ['mailq', []]]) {
+  const candidates = [
+    ['/usr/sbin/postqueue', ['-p']],
+    ['/usr/bin/postqueue', ['-p']],
+    ['/usr/sbin/mailq',    []],
+    ['/usr/bin/mailq',     []],
+    ['postqueue',          ['-p']],
+    ['mailq',              []],
+  ];
+  for (const [bin, args] of candidates) {
     try {
-      const { stdout } = await execFileAsync(cmd[0], cmd[1], { timeout: 10000 });
+      const { stdout } = await execFileAsync(bin, args, { timeout: 10000 });
       return stdout;
-    } catch (_) {
-      // try next command
-    }
+    } catch (_) {}
   }
   return null;
 }

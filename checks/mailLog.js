@@ -25,13 +25,31 @@ function extractDomain(address) {
   return parts.length === 2 ? parts[1].toLowerCase() : null;
 }
 
+function resolveLogPath(configPath) {
+  const candidates = [
+    configPath,
+    '/var/log/mail.log',
+    '/var/log/maillog',
+    '/var/log/mail/mail.log',
+  ];
+  for (const p of candidates) {
+    if (!p) continue;
+    try {
+      fs.accessSync(p, fs.constants.R_OK);
+      return p;
+    } catch (_) {}
+  }
+  return null;
+}
+
 async function readRecentLines(logPath, sinceMinutes) {
   const cutoff = Date.now() - sinceMinutes * 60 * 1000;
   const lines = [];
 
-  if (!fs.existsSync(logPath)) return lines;
+  const resolvedPath = resolveLogPath(logPath);
+  if (!resolvedPath) return { lines, resolvedPath: null };
 
-  const stream = fs.createReadStream(logPath, { encoding: 'utf8' });
+  const stream = fs.createReadStream(resolvedPath, { encoding: 'utf8' });
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
 
   const currentYear = new Date().getFullYear();
@@ -46,7 +64,7 @@ async function readRecentLines(logPath, sinceMinutes) {
     }
   }
 
-  return lines;
+  return { lines, resolvedPath };
 }
 
 async function check(config) {
@@ -66,7 +84,15 @@ async function check(config) {
   };
 
   try {
-    const lines = await readRecentLines(config.MAIL_LOG_PATH, config.CHECK_INTERVAL_MINUTES);
+    const { lines, resolvedPath } = await readRecentLines(config.MAIL_LOG_PATH, config.CHECK_INTERVAL_MINUTES);
+
+    if (!resolvedPath) {
+      result.status = 'error';
+      result.findings.push({ type: 'read_error', message: `Mail-Log nicht lesbar — geprüfte Pfade: ${config.MAIL_LOG_PATH}, /var/log/mail.log, /var/log/maillog. Berechtigungen prüfen (Gruppe adm).` });
+      return result;
+    }
+
+    result.metrics.logPath = resolvedPath;
 
     for (const line of lines) {
       const parsed = parseLine(line);
