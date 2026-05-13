@@ -31,6 +31,9 @@ function resolveLogPath(configPath) {
     '/var/log/mail.log',
     '/var/log/maillog',
     '/var/log/mail/mail.log',
+    '/var/log/plesk/maillog',
+    '/usr/local/psa/var/log/maillog',
+    '/var/log/psa-mm.log',
   ];
   for (const p of candidates) {
     if (!p) continue;
@@ -88,7 +91,7 @@ async function check(config) {
 
     if (!resolvedPath) {
       result.status = 'error';
-      result.findings.push({ type: 'read_error', message: `Mail-Log nicht lesbar — geprüfte Pfade: ${config.MAIL_LOG_PATH}, /var/log/mail.log, /var/log/maillog. Berechtigungen prüfen (Gruppe adm).` });
+      result.findings.push({ type: 'read_error', message: `Mail-Log nicht lesbar — geprüfte Pfade: ${config.MAIL_LOG_PATH || '(keiner)'}, /var/log/mail.log, /var/log/maillog, /var/log/plesk/maillog, /usr/local/psa/var/log/maillog. Ggf. MAIL_LOG_PATH setzen oder Berechtigungen prüfen.` });
       return result;
     }
 
