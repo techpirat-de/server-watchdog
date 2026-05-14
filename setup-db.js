@@ -1,6 +1,6 @@
 'use strict';
 
-require('dotenv').config();
+require('dotenv').config({ override: true });
 const mysql = require('mysql2/promise');
 
 async function main() {

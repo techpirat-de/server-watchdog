@@ -32,7 +32,15 @@ function buildTextBody(report) {
 }
 
 async function send(report, config) {
-  if (!config.ENABLE_EMAIL_NOTIFIER || config.ENABLE_EMAIL_NOTIFIER === 'false') return;
+  if (!config.ENABLE_EMAIL_NOTIFIER || config.ENABLE_EMAIL_NOTIFIER === 'false') {
+    return { channel: 'email', status: 'skipped', reason: 'disabled' };
+  }
+
+  const required = ['SMTP_HOST', 'SMTP_USER', 'SMTP_PASS', 'ALERT_EMAIL_TO', 'ALERT_EMAIL_FROM'];
+  const missing = required.filter((key) => !config[key]);
+  if (missing.length) {
+    return { channel: 'email', status: 'skipped', reason: `missing ${missing.join(', ')}` };
+  }
 
   const transporter = nodemailer.createTransport({
     host: config.SMTP_HOST,
@@ -44,14 +52,21 @@ async function send(report, config) {
     },
   });
 
-  await transporter.sendMail({
+  const info = await transporter.sendMail({
     from: config.ALERT_EMAIL_FROM,
     to: config.ALERT_EMAIL_TO,
     subject: buildSubject(report),
     text: buildTextBody(report),
   });
 
-  console.log(`[emailNotifier] Alert sent to ${config.ALERT_EMAIL_TO}`);
+  return {
+    channel: 'email',
+    status: info.rejected?.length ? 'partial' : 'sent',
+    messageId: info.messageId,
+    accepted: info.accepted || [],
+    rejected: info.rejected || [],
+    response: info.response,
+  };
 }
 
 module.exports = { send };

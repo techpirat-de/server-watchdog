@@ -1,6 +1,6 @@
 'use strict';
 
-require('dotenv').config();
+require('dotenv').config({ override: true });
 const os = require('os');
 
 const mailQueue = require('./checks/mailQueue');

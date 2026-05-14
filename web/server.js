@@ -1,6 +1,6 @@
 'use strict';
 
-require('dotenv').config({ path: require('path').join(__dirname, '../.env') });
+require('dotenv').config({ path: require('path').join(__dirname, '../.env'), override: true });
 
 const express = require('express');
 const basicAuth = require('express-basic-auth');

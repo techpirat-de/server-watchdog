@@ -27,10 +27,11 @@ function buildMessage(report) {
 }
 
 async function send(report, config) {
-  if (!config.ENABLE_TELEGRAM_NOTIFIER || config.ENABLE_TELEGRAM_NOTIFIER === 'false') return;
+  if (!config.ENABLE_TELEGRAM_NOTIFIER || config.ENABLE_TELEGRAM_NOTIFIER === 'false') {
+    return { channel: 'telegram', status: 'skipped', reason: 'disabled' };
+  }
   if (!config.TELEGRAM_BOT_TOKEN || !config.TELEGRAM_CHAT_ID) {
-    console.error('[telegramNotifier] Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID');
-    return;
+    return { channel: 'telegram', status: 'skipped', reason: 'missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID' };
   }
 
   const fetch = (await import('node-fetch')).default;
@@ -52,7 +53,13 @@ async function send(report, config) {
     throw new Error(`Telegram API error ${res.status}: ${body}`);
   }
 
-  console.log(`[telegramNotifier] Alert sent to chat ${config.TELEGRAM_CHAT_ID}`);
+  const body = await res.json().catch(() => ({}));
+  return {
+    channel: 'telegram',
+    status: 'sent',
+    messageId: body.result?.message_id || null,
+    chatId: body.result?.chat?.id || config.TELEGRAM_CHAT_ID,
+  };
 }
 
 module.exports = { send };
