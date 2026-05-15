@@ -152,6 +152,13 @@ function scoreToRisk(score) {
   return 'low';
 }
 
+function riskToMaxScore(risk) {
+  if (risk === 'critical') return RISK_SCORE.critical;
+  if (risk === 'high') return RISK_SCORE.critical - 1;
+  if (risk === 'medium') return RISK_SCORE.high - 1;
+  return RISK_SCORE.medium - 1;
+}
+
 function addReason(reasons, reason) {
   if (!reasons.some((r) => r.label === reason.label && r.line === reason.line)) {
     reasons.push(reason);
@@ -203,6 +210,34 @@ function adjustRuleForContext(rule, context) {
   }
 
   return { adjustedScore, adjustedRisk };
+}
+
+function hasCriticalSignal(reasons) {
+  return reasons.some((reason) => reason.risk === 'critical' || [
+    'POST/GET-basierte Command Execution',
+    'eval(base64_decode(...))',
+    'assert($_POST/$_GET)',
+    'Crypto-Miner Hinweis',
+  ].includes(reason.label));
+}
+
+function applyContextCaps(score, reasons, context, metadata) {
+  let cappedScore = score;
+
+  if (context.isKnownWordPressCode && !hasCriticalSignal(reasons)) {
+    cappedScore = Math.min(cappedScore, riskToMaxScore('high'));
+    if (metadata.ageHours >= 24 * 30) {
+      cappedScore = Math.min(cappedScore, riskToMaxScore('medium'));
+    } else if (metadata.ageHours >= 24 * 7) {
+      cappedScore = Math.max(0, cappedScore - 15);
+    }
+  }
+
+  if (context.isLowPriorityCache && !hasCriticalSignal(reasons)) {
+    cappedScore = Math.min(cappedScore, riskToMaxScore('medium'));
+  }
+
+  return cappedScore;
 }
 
 async function hashFile(filePath) {
@@ -296,6 +331,7 @@ async function scanFile(filePath) {
     addReason(reasons, { label: 'Geänderte Datei im WordPress-Core-Pfad', risk: 'medium', score: 20 });
   }
 
+  score = applyContextCaps(score, reasons, context, { ageHours });
   const risk = scoreToRisk(score);
   return {
     filePath,

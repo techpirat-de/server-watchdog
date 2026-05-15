@@ -235,6 +235,7 @@ Der Scanner bewertet deshalb mehrere Faktoren gemeinsam:
 - Plugin-/Theme-Slug, falls aus dem Pfad ableitbar
 - Risiko-Score pro Datei
 - konkrete Gründe, zum Beispiel Webshell-Muster, Obfuskation oder Remote-Download
+- Dateialter: ältere unveränderte Plugin-/Theme-Dateien werden weniger aggressiv bewertet
 
 Standardmäßig werden sehr laute WordPress-Pfade niedriger priorisiert oder ignoriert:
 
@@ -250,6 +251,8 @@ Richtwerte:
 | MEDIUM   | Unbekannte PHP-Datei mit Command-Funktion, Datei in Cache/Temp, mehrere schwache Signale kombiniert |
 | HIGH     | Obfuskation, `php://input`, Remote Download mit Ausführungshinweis, PHP-Dateien außerhalb erwarteter Plugin-Struktur |
 | CRITICAL | PHP in Upload/Media, Webshell-Muster, `eval(base64_decode())`, POST/GET-basierte Command Execution, Crypto-Miner-Hinweise |
+
+Bekannte Plugin-/Theme-/Language-Dateien werden ohne starke Malware-Signale maximal als `HIGH` bewertet. Einzelne Command-Funktionen wie `system()` oder `exec()` in bekanntem Plugin-Kontext reichen alleine nicht für `CRITICAL`.
 
 Wichtig: Ein Fund bedeutet zunächst „prüfen“, nicht automatisch „löschen“. Vor Löschungen immer Backup, Hash, Pfad und Plugin-Zuordnung prüfen.
 
