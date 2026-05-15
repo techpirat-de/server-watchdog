@@ -164,13 +164,65 @@ function buildHourlyReport(reports, worstRisk) {
 
 // ── Notifications ─────────────────────────────────────────────────────────────
 
-async function sendNotifications(aiResult, latestReport, { skipChannels = new Set() } = {}) {
+function computeTrendDetails(reports) {
+  if (!reports || reports.length < 2) return null;
+
+  const first = reports[0];
+  const last  = reports[reports.length - 1];
+
+  const riskRank = { low: 0, medium: 1, high: 2, critical: 3 };
+  const firstRisk = first.overall_risk || 'low';
+  const lastRisk  = last.overall_risk  || 'low';
+
+  const getCheck = (report, name) => (report.checks || []).find((c) => c.name === name);
+
+  const firstSf = getCheck(first, 'suspiciousFiles');
+  const lastSf  = getCheck(last,  'suspiciousFiles');
+  const sfDelta = (lastSf?.metrics?.flagged || 0) - (firstSf?.metrics?.flagged || 0);
+
+  const firstWp = getCheck(first, 'wordpressCheck');
+  const lastWp  = getCheck(last,  'wordpressCheck');
+  const wpSecDelta = (lastWp?.metrics?.withoutSecurityPlugin || 0) - (firstWp?.metrics?.withoutSecurityPlugin || 0);
+
+  const firstMq = getCheck(first, 'mailQueue');
+  const lastMq  = getCheck(last,  'mailQueue');
+  const mqDelta = (lastMq?.metrics?.total || 0) - (firstMq?.metrics?.total || 0);
+
+  const changes = [];
+
+  if (firstRisk !== lastRisk) {
+    const improved = riskRank[lastRisk] < riskRank[firstRisk];
+    changes.push(`Risiko: ${firstRisk.toUpperCase()} → ${lastRisk.toUpperCase()} (${improved ? 'verbessert' : 'verschlechtert'})`);
+  }
+
+  if (sfDelta < 0) changes.push(`${Math.abs(sfDelta)} auffällige Datei(en) weniger`);
+  if (sfDelta > 0) changes.push(`${sfDelta} neue auffällige Datei(en)`);
+
+  if (wpSecDelta < 0) changes.push(`Security-Plugin auf ${Math.abs(wpSecDelta)} Site(s) installiert`);
+  if (wpSecDelta > 0) changes.push(`${wpSecDelta} Site(s) ohne Security-Plugin (neu)`);
+
+  if (mqDelta > 5) changes.push(`Mail-Queue um ${mqDelta} Mails gewachsen`);
+  if (mqDelta < -5) changes.push(`Mail-Queue um ${Math.abs(mqDelta)} Mails reduziert`);
+
+  return {
+    firstRisk,
+    lastRisk,
+    improved:  riskRank[lastRisk] < riskRank[firstRisk],
+    worsened:  riskRank[lastRisk] > riskRank[firstRisk],
+    stable:    firstRisk === lastRisk,
+    reportCount: reports.length,
+    changes,
+  };
+}
+
+async function sendNotifications(aiResult, latestReport, { skipChannels = new Set(), trendDetails = null } = {}) {
   const notifyReport = {
     timestamp:        new Date().toISOString(),
     hostname:         config.SERVER_NAME,
     overallRisk:      aiResult.risk,
     checks:           latestReport.checks,
     aiReview:         { response: aiResult },
+    trendDetails,
     notificationsSent: [],
   };
 
@@ -299,9 +351,14 @@ async function main() {
   await updateAiReview(latestReport.id, { status: 'ok', risk: aiResult.risk, findings: aiCheck.findings, response: aiResult });
   console.log(`[ai-review] AI result saved to report id=${latestReport.id}`);
 
+  const trendDetails = computeTrendDetails(reports);
+  if (trendDetails?.changes.length) {
+    console.log(`[ai-review] Trend: ${trendDetails.stable ? 'stable' : trendDetails.improved ? 'improving' : 'worsening'} — ${trendDetails.changes.join(', ')}`);
+  }
+
   const notificationDecision = await shouldSendNotification(aiResult, latestReport);
   if (notificationDecision.send) {
-    const notificationsSent = await sendNotifications(aiResult, latestReport, { skipChannels: notificationDecision.skipChannels });
+    const notificationsSent = await sendNotifications(aiResult, latestReport, { skipChannels: notificationDecision.skipChannels, trendDetails });
     await updateAiReview(latestReport.id, { status: 'ok', risk: aiResult.risk, findings: aiCheck.findings, response: aiResult }, notificationsSent);
   } else {
     const notificationsSent = [{ channel: 'all', status: 'skipped', reason: notificationDecision.reason }];

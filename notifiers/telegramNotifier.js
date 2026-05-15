@@ -185,6 +185,18 @@ function buildMessage(report) {
     lines.push(`Status: ${status}`);
   }
 
+  // Trend (last hour delta)
+  const trend = report.trendDetails;
+  if (trend?.changes?.length) {
+    const arrow = trend.improved ? '↘ verbessert' : trend.worsened ? '↗ verschlechtert' : '→ stabil';
+    lines.push('');
+    lines.push(`Verlauf (${trend.reportCount} Läufe, ${arrow}):`);
+    trend.changes.forEach((c) => lines.push(`  · ${c}`));
+  } else if (trend?.stable && trend.reportCount > 1) {
+    lines.push('');
+    lines.push(`Verlauf: Stabil auf ${trend.lastRisk.toUpperCase()} (${trend.reportCount} Läufe)`);
+  }
+
   return lines.join('\n');
 }
 

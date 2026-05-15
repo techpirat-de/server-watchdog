@@ -13,6 +13,7 @@ const RISK_RANK = { low: 0, medium: 1, high: 2, critical: 3 };
 
 // Security plugins legitimately use base64, eval, WAF patterns, crypto, php://input —
 // only flag if POST/GET command execution or crypto miners appear (those are never expected)
+// Security plugins: cap almost everything to LOW (WAF, crypto, eval etc. are expected here)
 const TRUSTED_SECURITY_PLUGINS = new Set([
   'wordfence', 'better-wp-security', 'sucuri-scanner',
   'shield-security', 'bulletproof-security', 'wp-cerber', 'all-in-one-wp-security-and-firewall',
@@ -20,6 +21,25 @@ const TRUSTED_SECURITY_PLUGINS = new Set([
 const SECURITY_PLUGIN_ALLOWED_HIGH_CONFIDENCE = new Set([
   'POST/GET-basierte Command Execution',
   'Crypto-Miner Hinweis',
+]);
+
+// Popular large plugins: base64, call_user_func, Remote URLs etc. are normal —
+// cap accumulated boilerplate scores to MEDIUM unless a real red flag is present
+const TRUSTED_POPULAR_PLUGINS = new Set([
+  'woocommerce', 'elementor', 'elementor-pro', 'updraftplus',
+  'yoast-seo', 'wordpress-seo', 'contact-form-7', 'wpforms-lite',
+  'advanced-custom-fields', 'acf', 'jetpack', 'gutenberg',
+  'the-events-calendar', 'bbpress', 'buddypress', 'mailchimp-for-woocommerce',
+]);
+
+// Patterns that are always real red flags regardless of plugin
+const REAL_RED_FLAG_LABELS = new Set([
+  'POST/GET-basierte Command Execution',
+  'Crypto-Miner Hinweis',
+  'eval(base64_decode(...))',
+  'assert($_POST/$_GET)',
+  'PHP-Datei in Upload/Media-Verzeichnis',
+  'PHP-Datei in System-Temp-Verzeichnis',
 ]);
 const RISK_SCORE = { medium: 30, high: 60, critical: 100 };
 const CONTEXT_DIRS = {
@@ -216,8 +236,9 @@ function adjustRuleForContext(rule, context) {
 
   if (context.isKnownWordPressCode || context.isLowPriorityCache) {
     if (rule.command) {
-      adjustedScore = 10;
-      adjustedRisk = 'low';
+      // shell_exec/system/exec in WP code is unusual → MEDIUM, not LOW
+      adjustedScore = Math.min(adjustedScore, 35);
+      adjustedRisk = 'medium';
     } else if (rule.reducibleInWp || ['Remote URL im Code', 'WordPress HTTP API', 'curl_exec()', 'Variable Funktion', 'call_user_func()', 'Sehr lange Codezeile', 'Langer Base64-ähnlicher String'].includes(rule.label)) {
       adjustedScore = Math.min(adjustedScore, 5);
       adjustedRisk = 'low';
@@ -234,6 +255,16 @@ function isSecurityPlugin(context) {
   return context.isKnownWordPressCode
     && context.componentType === 'plugins'
     && TRUSTED_SECURITY_PLUGINS.has(context.component);
+}
+
+function isTrustedPopularPlugin(context) {
+  return context.isKnownWordPressCode
+    && context.componentType === 'plugins'
+    && TRUSTED_POPULAR_PLUGINS.has(context.component);
+}
+
+function hasRealRedFlag(reasons) {
+  return reasons.some((r) => REAL_RED_FLAG_LABELS.has(r.label));
 }
 
 function hasCriticalSignal(reasons) {
@@ -254,6 +285,11 @@ function applyContextCaps(score, reasons, context, metadata) {
 
   if (isSecurityPlugin(context) && !hasCriticalSignalForSecPlugin(reasons)) {
     cappedScore = Math.min(cappedScore, riskToMaxScore('low'));
+  }
+
+  if (isTrustedPopularPlugin(context) && !hasRealRedFlag(reasons)) {
+    // WooCommerce, Elementor etc. accumulate boilerplate patterns — cap at MEDIUM
+    cappedScore = Math.min(cappedScore, riskToMaxScore('medium'));
   }
 
   if (context.isKnownWordPressCode && !hasCriticalSignal(reasons)) {
