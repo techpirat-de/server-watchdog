@@ -140,7 +140,7 @@ router.post('/test-notify', async (req, res) => {
       name: 'testNotification',
       status: 'warning',
       risk: 'medium',
-      findings: [{ type: 'test', message: 'Dies ist eine Test-Benachrichtigung vom Server Watchdog Dashboard.' }],
+      findings: [{ type: 'test', message: 'Dies ist eine Test-Benachrichtigung vom Plesk Server Watchdog Dashboard.' }],
       metrics: {},
     }],
     aiReview: null,

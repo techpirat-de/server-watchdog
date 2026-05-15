@@ -1,7 +1,7 @@
 {
-  "name": "server-watchdog",
+  "name": "plesk-server-watchdog",
   "version": "2.0.0",
-  "description": "Server monitoring tool for Debian/Plesk: mail queue, suspicious files, server load, AI review, web dashboard",
+  "description": "Plesk server monitoring tool: mail queue, suspicious files, server load, AI review, web dashboard",
   "main": "monitor.js",
   "scripts": {
     "start": "node monitor.js",

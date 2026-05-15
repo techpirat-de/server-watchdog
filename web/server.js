@@ -24,7 +24,7 @@ app.use(express.json());
 app.use(basicAuth({
   users: { [WEB_USER]: WEB_PASS },
   challenge: true,
-  realm: 'Server Watchdog',
+  realm: 'Plesk Server Watchdog',
 }));
 
 app.use(express.static(path.join(__dirname, 'public')));
@@ -36,5 +36,5 @@ app.get('*', (req, res) => {
 });
 
 app.listen(PORT, HOST, () => {
-  console.log(`[web] Server Watchdog UI running at http://${HOST}:${PORT}`);
+  console.log(`[web] Plesk Server Watchdog UI running at http://${HOST}:${PORT}`);
 });

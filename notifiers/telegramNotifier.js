@@ -1,26 +1,44 @@
 'use strict';
 
 const RISK_EMOJI = { low: 'ℹ️', medium: '⚠️', high: '🔴', critical: '🚨' };
+const RISK_LABELS = { low: 'Niedrig', medium: 'Mittel', high: 'Hoch', critical: 'Kritisch' };
+const TREND_LABELS = { improving: 'verbessert sich', stable: 'stabil', worsening: 'verschlechtert sich', unknown: 'unklar' };
 
 function buildMessage(report) {
   const emoji = RISK_EMOJI[report.overallRisk] || '⚠️';
+  const ai = report.aiReview?.response || null;
+  const actions = Array.isArray(ai?.recommended_actions) ? ai.recommended_actions.filter(Boolean).slice(0, 3) : [];
   const lines = [
-    `${emoji} *Server Watchdog* — ${report.overallRisk.toUpperCase()}`,
+    `${emoji} *Plesk Server Watchdog* - ${RISK_LABELS[report.overallRisk] || report.overallRisk}`,
     `Host: \`${report.hostname}\``,
-    `Time: ${report.timestamp}`,
+    `Zeit: ${report.timestamp}`,
     '',
   ];
 
+  if (ai?.summary) {
+    lines.push(`*Kurzfazit:* ${ai.summary}`);
+  }
+  if (ai?.likely_cause) {
+    lines.push(`*Ursache:* ${ai.likely_cause}`);
+  }
+  if (ai?.trend) {
+    lines.push(`*Trend:* ${TREND_LABELS[ai.trend] || ai.trend}`);
+  }
+  if (actions.length) {
+    lines.push('', '*Nächste Schritte:*');
+    actions.forEach((action, idx) => lines.push(`${idx + 1}. ${action}`));
+  }
+
+  const findingLines = [];
   for (const check of report.checks) {
     if (check.findings.length === 0) continue;
-    lines.push(`*${check.name}* [${check.risk}]`);
     for (const f of check.findings.slice(0, 3)) {
-      lines.push(`• ${f.message || f.type}`);
+      findingLines.push(`- ${check.name}: ${f.message || f.type}`);
     }
   }
 
-  if (report.aiReview?.response?.summary) {
-    lines.push('', `_AI: ${report.aiReview.response.summary}_`);
+  if (findingLines.length) {
+    lines.push('', '*Auffällige Checks:*', ...findingLines.slice(0, 6));
   }
 
   return lines.join('\n');

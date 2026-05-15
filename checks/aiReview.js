@@ -60,7 +60,7 @@ async function check(report, config) {
               content: [
                 {
                   type: 'input_text',
-                  text: 'You are a server security analyst for a Debian/Plesk/Postfix server. Respond ONLY with valid JSON matching the schema. No markdown, no explanations outside JSON.',
+                  text: 'Du bist ein Server-Sicherheitsanalyst für einen Debian/Plesk/Postfix-Server. Antworte ausschließlich mit validem JSON passend zum Schema. Kein Markdown, kein Text außerhalb des JSON. Alle frei formulierten Textwerte müssen auf Deutsch sein.',
                 },
               ],
             },
@@ -108,31 +108,31 @@ async function check(report, config) {
 function buildPrompt(report) {
   const safe = sanitizeReport(report);
 
-  return `Analyze this server monitoring report and respond with JSON only.
+  return `Analysiere diesen Server-Monitoring-Report und antworte ausschliesslich mit JSON.
 
-Important evaluation rules:
-- Distinguish NEW outgoing messages from retry/deferred attempts. High retry volume alone is not proof of an active spam outbreak.
-- Treat new queue IDs, fast queue growth, many successful outbound deliveries, or a rising queue trend as stronger evidence than deferred retries.
-- Treat local PHP processes from /tmp, /var/tmp, or /dev/shm as critical unless clearly proven benign.
-- Treat PHP/PHTML files inside uploads, cache, tmp, image, or media directories as high risk.
-- Treat random-looking PHP filenames in webroots as high risk, especially if large, obfuscated, or recently modified.
-- Treat unknown shell users, unexpected cronjobs, and cronjobs pointing to deleted projects as medium to high risk.
-- Treat SMTP auth failures for non-existing users as background internet noise unless there are successful logins or high rates.
-- Treat delivery messages like "delivery temporarily suspended", "user over quota", and "mailbox temporarily disabled" as lower risk when they relate to old queue retries.
-- Prefer LOW risk when the queue is empty, no suspicious processes exist, and suspicious file checks are clean.
-- Recommend manual review before destructive actions. Never recommend blindly deleting files without backup unless the report clearly identifies confirmed malware.
+Wichtige Bewertungsregeln:
+- Unterscheide NEUE ausgehende Nachrichten von Wiederholversuchen/deferred retries. Hohe Retry-Zahlen allein sind kein Beweis für einen aktiven Spam-Ausbruch.
+- Neue Queue-IDs, schnelles Queue-Wachstum, viele erfolgreiche ausgehende Zustellungen oder ein steigender Queue-Trend sind stärkere Hinweise als alte Wiederholversuche.
+- Lokale PHP-Prozesse aus /tmp, /var/tmp oder /dev/shm sind kritisch, ausser sie sind eindeutig harmlos.
+- PHP/PHTML-Dateien in uploads, cache, tmp, image oder media sind hohes Risiko.
+- Zufallsähnliche PHP-Dateinamen in Webroots sind hohes Risiko, besonders wenn sie groß, obfuskiert oder kürzlich geändert sind.
+- Unbekannte Shell-User, unerwartete Cronjobs und Cronjobs auf gelöschte Projekte sind mittleres bis hohes Risiko.
+- SMTP-Auth-Fehler für nicht existierende User sind normales Internet-Grundrauschen, außer es gibt erfolgreiche Logins oder sehr hohe Raten.
+- Meldungen wie "delivery temporarily suspended", "user over quota" und "mailbox temporarily disabled" sind niedriger zu bewerten, wenn sie alte Queue-Retries betreffen.
+- Bevorzuge LOW, wenn Queue leer ist, keine verdächtigen Prozesse existieren und Datei-Scans sauber sind.
+- Gib klare Handlungsempfehlungen für Administratoren. Empfiehl manuelle Prüfung vor destruktiven Aktionen. Keine blinde Löschung ohne Backup empfehlen, außer der Report identifiziert bestätigte Malware.
 
 Report:
 ${safe}
 
-Required JSON response schema:
+Pflichtschema für die JSON-Antwort. Alle Textwerte auf Deutsch:
 {
   "risk": "low|medium|high|critical",
-  "summary": "One sentence summary of the situation",
-  "likely_cause": "Most probable cause of the findings",
+  "summary": "Ein kurzer deutscher Satz zur Gesamtsituation",
+  "likely_cause": "Wahrscheinlichste Ursache auf Deutsch, oder 'Keine Auffälligkeiten festgestellt'",
   "trend": "improving|stable|worsening|unknown",
   "confidence": 0.0,
-  "recommended_actions": ["Action 1", "Action 2"],
+  "recommended_actions": ["Konkrete Handlungsempfehlung 1", "Konkrete Handlungsempfehlung 2"],
   "notify": true,
   "urgency": "normal|urgent"
 }`;

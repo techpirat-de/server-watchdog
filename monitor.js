@@ -41,7 +41,7 @@ async function runCheck(name, fn, ...args) {
 
 async function main() {
   const startTime = Date.now();
-  console.log(`\n[monitor] ===== Server Watchdog starting at ${new Date().toISOString()} =====`);
+  console.log(`\n[monitor] ===== Plesk Server Watchdog starting at ${new Date().toISOString()} =====`);
   console.log(`[monitor] Host: ${config.SERVER_NAME}`);
 
   const checks = await Promise.all([
