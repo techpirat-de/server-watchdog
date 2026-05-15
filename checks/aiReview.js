@@ -121,6 +121,10 @@ Wichtige Bewertungsregeln:
 - Meldungen wie "delivery temporarily suspended", "user over quota" und "mailbox temporarily disabled" sind niedriger zu bewerten, wenn sie alte Queue-Retries betreffen.
 - Bevorzuge LOW, wenn Queue leer ist, keine verdächtigen Prozesse existieren und Datei-Scans sauber sind.
 - Gib klare Handlungsempfehlungen für Administratoren. Empfiehl manuelle Prüfung vor destruktiven Aktionen. Keine blinde Löschung ohne Backup empfehlen, außer der Report identifiziert bestätigte Malware.
+- WordPress ohne Security-Plugin ist LOW bis MEDIUM je nach Kontext — es ist kein Notfall, aber eine klare Handlungsempfehlung wert.
+- PHP-Dateien im WordPress-Upload-Verzeichnis sind CRITICAL — sofortige manuelle Prüfung notwendig.
+- Risiko-Plugins (WP File Manager etc.) sind HIGH, wenn kein Security-Plugin vorhanden ist.
+- WP_DEBUG=true und xmlrpc.php sind einzeln LOW, in Kombination mit anderen Problemen MEDIUM.
 
 Report:
 ${safe}

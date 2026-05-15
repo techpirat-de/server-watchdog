@@ -7,6 +7,7 @@ const mailQueue = require('./checks/mailQueue');
 const mailLog = require('./checks/mailLog');
 const suspiciousFiles = require('./checks/suspiciousFiles');
 const serverLoad = require('./checks/serverLoad');
+const wordpressCheck = require('./checks/wordpressCheck');
 const db = require('./lib/db');
 
 const RISK_RANK = { low: 0, medium: 1, high: 2, critical: 3 };
@@ -49,6 +50,7 @@ async function main() {
     runCheck('mailLog', mailLog.check, config),
     runCheck('suspiciousFiles', suspiciousFiles.check, config),
     runCheck('serverLoad', serverLoad.check),
+    runCheck('wordpressCheck', wordpressCheck.check, config),
   ]);
 
   const overallRisk = computeOverallRisk(checks);
