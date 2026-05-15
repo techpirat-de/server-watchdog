@@ -10,6 +10,17 @@ const readline = require('readline');
 const execFileAsync = promisify(execFile);
 
 const RISK_RANK = { low: 0, medium: 1, high: 2, critical: 3 };
+
+// Security plugins legitimately use base64, eval, WAF patterns, crypto, php://input —
+// only flag if POST/GET command execution or crypto miners appear (those are never expected)
+const TRUSTED_SECURITY_PLUGINS = new Set([
+  'wordfence', 'better-wp-security', 'sucuri-scanner',
+  'shield-security', 'bulletproof-security', 'wp-cerber', 'all-in-one-wp-security-and-firewall',
+]);
+const SECURITY_PLUGIN_ALLOWED_HIGH_CONFIDENCE = new Set([
+  'POST/GET-basierte Command Execution',
+  'Crypto-Miner Hinweis',
+]);
 const RISK_SCORE = { medium: 30, high: 60, critical: 100 };
 const CONTEXT_DIRS = {
   upload: ['uploads', 'upload', 'files', 'media', 'images'],
@@ -196,6 +207,13 @@ function adjustRuleForContext(rule, context) {
   let adjustedScore = rule.score;
   let adjustedRisk = rule.risk;
 
+  if (isSecurityPlugin(context)) {
+    // Security plugins use all kinds of low-level PHP by design — cap everything to low
+    adjustedScore = Math.min(adjustedScore, 5);
+    adjustedRisk = 'low';
+    return { adjustedScore, adjustedRisk };
+  }
+
   if (context.isKnownWordPressCode || context.isLowPriorityCache) {
     if (rule.command) {
       adjustedScore = 10;
@@ -212,6 +230,12 @@ function adjustRuleForContext(rule, context) {
   return { adjustedScore, adjustedRisk };
 }
 
+function isSecurityPlugin(context) {
+  return context.isKnownWordPressCode
+    && context.componentType === 'plugins'
+    && TRUSTED_SECURITY_PLUGINS.has(context.component);
+}
+
 function hasCriticalSignal(reasons) {
   return reasons.some((reason) => reason.risk === 'critical' || [
     'POST/GET-basierte Command Execution',
@@ -221,8 +245,16 @@ function hasCriticalSignal(reasons) {
   ].includes(reason.label));
 }
 
+function hasCriticalSignalForSecPlugin(reasons) {
+  return reasons.some((r) => SECURITY_PLUGIN_ALLOWED_HIGH_CONFIDENCE.has(r.label));
+}
+
 function applyContextCaps(score, reasons, context, metadata) {
   let cappedScore = score;
+
+  if (isSecurityPlugin(context) && !hasCriticalSignalForSecPlugin(reasons)) {
+    cappedScore = Math.min(cappedScore, riskToMaxScore('low'));
+  }
 
   if (context.isKnownWordPressCode && !hasCriticalSignal(reasons)) {
     cappedScore = Math.min(cappedScore, riskToMaxScore('high'));
@@ -300,10 +332,16 @@ async function scanFile(filePath) {
     let lineNum = 0;
     for await (const line of rl) {
       lineNum++;
-      for (const { pattern, label, risk, score: ruleScore } of HIGH_CONFIDENCE_RULES) {
-        if (pattern.test(line)) {
-          addReason(reasons, { label, risk, score: ruleScore, line: lineNum, snippet: line.slice(0, 160).trim() });
-          score += ruleScore;
+      for (const rule of HIGH_CONFIDENCE_RULES) {
+        if (rule.pattern.test(line)) {
+          let s = rule.score;
+          let r = rule.risk;
+          if (isSecurityPlugin(context) && !SECURITY_PLUGIN_ALLOWED_HIGH_CONFIDENCE.has(rule.label)) {
+            s = Math.min(s, 5);
+            r = 'low';
+          }
+          addReason(reasons, { label: rule.label, risk: r, score: s, line: lineNum, snippet: line.slice(0, 160).trim() });
+          score += s;
         }
       }
       for (const rule of CONTEXTUAL_RULES) {
