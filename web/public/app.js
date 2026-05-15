@@ -80,6 +80,8 @@ function renderCheckCards(checks) {
   if (!checks?.length) { grid.innerHTML = '<p style="color:var(--muted)">Keine Daten</p>'; return; }
 
   grid.innerHTML = checks.map((c) => {
+    if (c.name === 'wordpressCheck') return renderWordPressCard(c);
+
     const icon = STATUS_ICON[c.status] || '?';
     const iconColor = c.status === 'ok' ? 'var(--low)' : c.status === 'warning' ? 'var(--medium)' : 'var(--high)';
     const findingsHtml = c.findings.length === 0
@@ -99,6 +101,67 @@ function renderCheckCards(checks) {
       <div style="margin-top:12px">${findingsHtml}</div>
     </div>`;
   }).join('');
+
+  // Attach collapse toggles for WordPress site groups
+  grid.querySelectorAll('.wp-site-header').forEach((header) => {
+    header.addEventListener('click', () => {
+      const body = header.nextElementSibling;
+      if (!body) return;
+      const open = body.style.display !== 'none';
+      body.style.display = open ? 'none' : '';
+      header.querySelector('.wp-toggle').textContent = open ? '▶' : '▼';
+    });
+  });
+}
+
+function renderWordPressCard(c) {
+  const icon = STATUS_ICON[c.status] || '?';
+  const iconColor = c.status === 'ok' ? 'var(--low)' : c.status === 'warning' ? 'var(--medium)' : 'var(--high)';
+  const sites = c.metrics?.siteDetails || [];
+  const m = c.metrics || {};
+
+  const summary = sites.length === 0
+    ? 'Keine WordPress-Installation gefunden'
+    : `${sites.length} Installation${sites.length !== 1 ? 'en' : ''}`
+      + (m.withoutSecurityPlugin ? ` · ${m.withoutSecurityPlugin} ohne Security-Plugin` : '')
+      + (m.phpInUploadsTotal ? ` · ${m.phpInUploadsTotal} PHP in Uploads` : '');
+
+  const sitesHtml = sites.map((s) => {
+    const riskColor = FINDING_COLOR[s.risk] || 'var(--muted)';
+    const issueRows = s.issues.map((issue) => `
+      <div class="wp-issue">
+        <div class="finding-dot" style="background:${FINDING_COLOR[issue.risk] || 'var(--muted)'}"></div>
+        <span>${escHtml(issue.message)}</span>
+      </div>`).join('');
+
+    const secBadge = s.securityPlugins.length
+      ? `<span class="wp-plugin-ok">✓ ${escHtml(s.securityPlugins[0])}</span>`
+      : `<span class="wp-plugin-missing">✗ kein Security-Plugin</span>`;
+
+    return `
+      <div class="wp-site">
+        <div class="wp-site-header">
+          <span class="wp-toggle">▼</span>
+          <span class="wp-domain">${escHtml(s.site)}</span>
+          ${s.version ? `<span class="wp-version">WP ${escHtml(s.version)}</span>` : ''}
+          <span class="badge badge-${s.risk}" style="margin-left:auto">${s.risk.toUpperCase()}</span>
+        </div>
+        <div class="wp-site-body">
+          <div class="wp-meta">${secBadge}</div>
+          ${issueRows || '<div class="wp-issue" style="color:var(--low)">Keine Auffälligkeiten</div>'}
+        </div>
+      </div>`;
+  }).join('');
+
+  return `<div class="check-card check-card--wide">
+    <div class="check-name">
+      <span>WordPress Security</span>
+      <span class="check-status-icon" style="color:${iconColor}" title="${c.status}">${icon}</span>
+    </div>
+    ${RISK_BADGE[c.risk] || ''}
+    <div class="wp-summary">${escHtml(summary)}</div>
+    <div class="wp-sites">${sitesHtml}</div>
+  </div>`;
 }
 
 function renderAiReview(ai) {
