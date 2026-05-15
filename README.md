@@ -84,7 +84,8 @@ VHOSTS_PATH=/var/www/vhosts
 
 # PHP-Datei-Scan: Dateien der letzten X Stunden
 RECENT_FILE_HOURS=24
-# Komma-getrennte Pfad-Fragmente, die ignoriert werden sollen
+# Komma-getrennte zusätzliche Pfad-Fragmente, die ignoriert werden sollen
+# Standardmäßig bereits ignoriert: /wp-content/wflogs/, /wp-content/uploads/cache/
 SUSPICIOUS_FILES_EXCLUDE=
 
 # MySQL Datenbank
@@ -235,14 +236,20 @@ Der Scanner bewertet deshalb mehrere Faktoren gemeinsam:
 - Risiko-Score pro Datei
 - konkrete Gründe, zum Beispiel Webshell-Muster, Obfuskation oder Remote-Download
 
+Standardmäßig werden sehr laute WordPress-Pfade niedriger priorisiert oder ignoriert:
+
+- `/wp-content/wflogs/` wird ignoriert
+- `/wp-content/uploads/cache/` wird ignoriert
+- Cache-Pfade wie `wp-content/cache` werden ohne zusätzliche Malware-Indikatoren niedrig bewertet
+
 Richtwerte:
 
 | Risiko   | Beispiele |
 |----------|-----------|
-| LOW      | Einzelnes `exec()`/`system()` in Plugin-Kontext ohne weitere Auffälligkeiten |
-| MEDIUM   | Unbekannte PHP-Datei mit Command-Funktion, Datei in Cache/Temp, verdächtiger Dateiname |
-| HIGH     | Obfuskation, `eval`/`base64_decode`-Kombination, PHP in Upload/Media |
-| CRITICAL | Webshell-Muster, POST/GET-basierte Command Execution, Crypto-Miner-Hinweise |
+| LOW      | Remote URL, lange Codezeile, Callback/variable Funktion oder einzelne Command-Funktion in bekanntem Plugin-/Theme-Kontext |
+| MEDIUM   | Unbekannte PHP-Datei mit Command-Funktion, Datei in Cache/Temp, mehrere schwache Signale kombiniert |
+| HIGH     | Obfuskation, `php://input`, Remote Download mit Ausführungshinweis, PHP-Dateien außerhalb erwarteter Plugin-Struktur |
+| CRITICAL | PHP in Upload/Media, Webshell-Muster, `eval(base64_decode())`, POST/GET-basierte Command Execution, Crypto-Miner-Hinweise |
 
 Wichtig: Ein Fund bedeutet zunächst „prüfen“, nicht automatisch „löschen“. Vor Löschungen immer Backup, Hash, Pfad und Plugin-Zuordnung prüfen.
 

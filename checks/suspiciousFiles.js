@@ -10,18 +10,29 @@ const readline = require('readline');
 const execFileAsync = promisify(execFile);
 
 const RISK_RANK = { low: 0, medium: 1, high: 2, critical: 3 };
-const RISK_SCORE = { low: 15, medium: 35, high: 70, critical: 100 };
+const RISK_SCORE = { medium: 30, high: 60, critical: 100 };
 const CONTEXT_DIRS = {
   upload: ['uploads', 'upload', 'files', 'media', 'images'],
   temp: ['tmp', 'temp', 'cache'],
 };
+const DEFAULT_EXCLUDES = [
+  '/wp-content/wflogs/',
+  '/wp-content/uploads/cache/',
+];
+const LOW_PRIORITY_CACHE_PARTS = [
+  'wflogs',
+  'uploads/cache',
+  'wp-content/cache',
+  'wp-content/uploads/cache',
+];
 
 const HIGH_CONFIDENCE_RULES = [
   { label: 'POST/GET-basierte Command Execution', score: 100, risk: 'critical', pattern: /\b(?:system|shell_exec|exec|passthru|proc_open|popen)\s*\(\s*\$_(?:POST|GET|REQUEST|COOKIE)\s*\[/i },
   { label: 'eval(base64_decode(...))', score: 95, risk: 'critical', pattern: /eval\s*\(\s*base64_decode\s*\(/i },
   { label: 'gzinflate(base64_decode(...))', score: 90, risk: 'high', pattern: /gzinflate\s*\(\s*base64_decode\s*\(/i },
   { label: 'assert($_POST/$_GET)', score: 90, risk: 'high', pattern: /assert\s*\(\s*\$_(?:POST|GET|REQUEST|COOKIE)\s*\[/i },
-  { label: 'PHP-Datei wird geschrieben', score: 85, risk: 'high', pattern: /file_put_contents\s*\([^;]+\.php/i },
+  { label: 'PHP-Datei wird geschrieben', score: 80, risk: 'high', pattern: /file_put_contents\s*\([^;]+\.php/i },
+  { label: 'php://input Zugriff', score: 70, risk: 'high', pattern: /php:\/\/input/i },
   { label: 'preg_replace /e Modifier', score: 85, risk: 'high', pattern: /preg_replace\s*\([^;]+\/e['"]/i },
   { label: 'create_function()', score: 70, risk: 'high', pattern: /create_function\s*\(/i },
   { label: 'Remote Download mit Ausführungshinweis', score: 70, risk: 'high', pattern: /(?:curl_exec|file_get_contents|fopen)\s*\([^;]+https?:\/\/[\s\S]{0,300}\b(?:eval|include|require|file_put_contents|shell_exec|system|exec)\s*\(/i },
@@ -30,27 +41,33 @@ const HIGH_CONFIDENCE_RULES = [
 ];
 
 const CONTEXTUAL_RULES = [
-  { label: 'eval()', score: 55, risk: 'medium', pattern: /eval\s*\(/i },
-  { label: 'base64_decode()', score: 25, risk: 'medium', pattern: /base64_decode\s*\(/i },
-  { label: 'gzinflate()', score: 45, risk: 'medium', pattern: /gzinflate\s*\(/i },
-  { label: 'assert()', score: 45, risk: 'medium', pattern: /assert\s*\(/i },
-  { label: 'shell_exec()', score: 25, risk: 'low', pattern: /shell_exec\s*\(/i, command: true },
-  { label: 'system()', score: 25, risk: 'low', pattern: /system\s*\(/i, command: true },
-  { label: 'exec()', score: 25, risk: 'low', pattern: /\bexec\s*\(/i, command: true },
-  { label: 'passthru()', score: 30, risk: 'medium', pattern: /passthru\s*\(/i, command: true },
-  { label: 'proc_open()', score: 35, risk: 'medium', pattern: /proc_open\s*\(/i, command: true },
-  { label: 'curl_exec()', score: 20, risk: 'low', pattern: /curl_exec\s*\(/i },
-  { label: 'Remote URL im Code', score: 25, risk: 'medium', pattern: /https?:\/\/[^\s'"]+/i },
-  { label: 'Variable Funktion', score: 35, risk: 'medium', pattern: /\$[A-Za-z_][A-Za-z0-9_]*\s*\(/ },
+  { label: 'eval()', score: 40, risk: 'medium', pattern: /eval\s*\(/i },
+  { label: 'base64_decode()', score: 35, risk: 'medium', pattern: /base64_decode\s*\(/i },
+  { label: 'gzinflate()', score: 35, risk: 'medium', pattern: /gzinflate\s*\(/i },
+  { label: 'assert()', score: 35, risk: 'medium', pattern: /assert\s*\(/i },
+  { label: 'shell_exec()', score: 50, risk: 'medium', pattern: /shell_exec\s*\(/i, command: true },
+  { label: 'system()', score: 50, risk: 'medium', pattern: /system\s*\(/i, command: true },
+  { label: 'exec()', score: 45, risk: 'medium', pattern: /\bexec\s*\(/i, command: true },
+  { label: 'passthru()', score: 50, risk: 'medium', pattern: /passthru\s*\(/i, command: true },
+  { label: 'proc_open()', score: 50, risk: 'medium', pattern: /proc_open\s*\(/i, command: true },
+  { label: 'curl_exec()', score: 5, risk: 'low', pattern: /curl_exec\s*\(/i },
+  { label: 'WordPress HTTP API', score: 5, risk: 'low', pattern: /\bwp_remote_(?:get|post|request|head)\s*\(/i },
+  { label: 'Remote URL im Code', score: 5, risk: 'low', pattern: /https?:\/\/[^\s'"]+/i },
+  { label: 'Variable Funktion', score: 10, risk: 'low', pattern: /\$[A-Za-z_][A-Za-z0-9_]*\s*\(/ },
+  { label: 'call_user_func()', score: 10, risk: 'low', pattern: /call_user_func(?:_array)?\s*\(/i },
 ];
 
 function buildExcludeList() {
   const raw = process.env.SUSPICIOUS_FILES_EXCLUDE || '';
-  return raw.split(',').map((s) => s.trim()).filter(Boolean);
+  return [
+    ...DEFAULT_EXCLUDES,
+    ...raw.split(',').map((s) => s.trim()).filter(Boolean),
+  ];
 }
 
 function isExcluded(filePath, excludeList) {
-  return excludeList.some((pattern) => filePath.includes(pattern));
+  const normalized = normalizePath(filePath);
+  return excludeList.some((pattern) => normalized.includes(normalizePath(pattern)));
 }
 
 async function findRecentPhpFiles(vhostsPath, hours) {
@@ -72,8 +89,17 @@ async function findRecentPhpFiles(vhostsPath, hours) {
 }
 
 function getPathParts(filePath) {
-  const parts = filePath.toLowerCase().split(path.sep);
+  const parts = normalizePath(filePath).split('/');
   return parts.filter(Boolean);
+}
+
+function normalizePath(filePath) {
+  return String(filePath || '').replace(/\\/g, '/').toLowerCase();
+}
+
+function isLowPriorityCachePath(filePath) {
+  const normalized = normalizePath(filePath);
+  return LOW_PRIORITY_CACHE_PARTS.some((part) => normalized.includes(`/${part}/`));
 }
 
 function classifyPath(filePath) {
@@ -86,6 +112,8 @@ function classifyPath(filePath) {
     isWordPressCore: false,
     isUploadLike: false,
     isTempLike: false,
+    isLowPriorityCache: isLowPriorityCachePath(filePath),
+    isKnownWordPressCode: false,
     isSystemTemp: filePath.startsWith('/tmp/') || filePath.startsWith('/var/tmp/') || filePath.startsWith('/dev/shm/'),
   };
 
@@ -101,13 +129,19 @@ function classifyPath(filePath) {
       context.area = `wordpress-${type}`;
       context.componentType = type;
       context.component = slug;
+      context.isKnownWordPressCode = true;
+    } else if (type === 'languages') {
+      context.area = 'wordpress-languages';
+      context.componentType = 'languages';
+      context.component = slug;
+      context.isKnownWordPressCode = true;
     } else {
       context.area = 'wordpress-content';
     }
   }
 
-  context.isUploadLike = CONTEXT_DIRS.upload.some((dir) => parts.includes(dir));
-  context.isTempLike = CONTEXT_DIRS.temp.some((dir) => parts.includes(dir));
+  context.isUploadLike = CONTEXT_DIRS.upload.some((dir) => parts.includes(dir)) && !context.isLowPriorityCache;
+  context.isTempLike = CONTEXT_DIRS.temp.some((dir) => parts.includes(dir)) && !context.isLowPriorityCache;
   return context;
 }
 
@@ -135,7 +169,7 @@ function isLikelyRandomPhpName(filePath) {
 function detectObfuscation(content) {
   const reasons = [];
   if (/[A-Za-z0-9+/]{220,}={0,2}/.test(content)) {
-    reasons.push({ label: 'Langer Base64-ähnlicher String', risk: 'high', score: 65 });
+    reasons.push({ label: 'Langer Base64-ähnlicher String', risk: 'medium', score: 25, reducibleInWp: true });
   }
   if (/\\x[0-9a-f]{2}/i.test(content) || /chr\s*\(\s*\d+\s*\)(?:\s*\.\s*chr\s*\()/i.test(content)) {
     reasons.push({ label: 'Hex/chr-Obfuskation', risk: 'high', score: 65 });
@@ -146,9 +180,29 @@ function detectObfuscation(content) {
 
   const longLines = content.split('\n').filter((line) => line.length > 1200);
   if (longLines.length > 0) {
-    reasons.push({ label: 'Sehr lange Codezeile', risk: 'medium', score: 40 });
+    reasons.push({ label: 'Sehr lange Codezeile', risk: 'low', score: 5, reducibleInWp: true });
   }
   return reasons;
+}
+
+function adjustRuleForContext(rule, context) {
+  let adjustedScore = rule.score;
+  let adjustedRisk = rule.risk;
+
+  if (context.isKnownWordPressCode || context.isLowPriorityCache) {
+    if (rule.command) {
+      adjustedScore = 10;
+      adjustedRisk = 'low';
+    } else if (rule.reducibleInWp || ['Remote URL im Code', 'WordPress HTTP API', 'curl_exec()', 'Variable Funktion', 'call_user_func()', 'Sehr lange Codezeile', 'Langer Base64-ähnlicher String'].includes(rule.label)) {
+      adjustedScore = Math.min(adjustedScore, 5);
+      adjustedRisk = 'low';
+    }
+  } else if (rule.command && !context.component) {
+    adjustedScore = Math.max(adjustedScore, 45);
+    adjustedRisk = 'medium';
+  }
+
+  return { adjustedScore, adjustedRisk };
 }
 
 async function hashFile(filePath) {
@@ -188,15 +242,18 @@ async function scanFile(filePath) {
   if (context.isSystemTemp && /^php/i.test(path.basename(filePath))) {
     addReason(reasons, { label: 'PHP-Datei in System-Temp-Verzeichnis', risk: 'critical', score: 100 });
     score += 100;
+  } else if (context.isLowPriorityCache) {
+    addReason(reasons, { label: 'PHP-Datei in bekanntem Cache-/Log-Pfad', risk: 'low', score: 10 });
+    score += 10;
   } else if (context.isUploadLike) {
-    addReason(reasons, { label: 'PHP-Datei in Upload/Media-Verzeichnis', risk: 'high', score: 60 });
-    score += 60;
+    addReason(reasons, { label: 'PHP-Datei in Upload/Media-Verzeichnis', risk: 'critical', score: 100 });
+    score += 100;
   } else if (context.isTempLike) {
     addReason(reasons, { label: 'PHP-Datei in Cache/Temp-Verzeichnis', risk: 'medium', score: 35 });
     score += 35;
   }
 
-  if (isLikelyRandomPhpName(filePath)) {
+  if (isLikelyRandomPhpName(filePath) && !context.isLowPriorityCache) {
     addReason(reasons, { label: 'Zufällig wirkender PHP-Dateiname', risk: 'medium', score: 35 });
     score += 35;
   }
@@ -214,17 +271,10 @@ async function scanFile(filePath) {
           score += ruleScore;
         }
       }
-      for (const { pattern, label, risk, score: ruleScore, command } of CONTEXTUAL_RULES) {
+      for (const rule of CONTEXTUAL_RULES) {
+        const { pattern, label } = rule;
         if (pattern.test(line)) {
-          let adjustedScore = ruleScore;
-          let adjustedRisk = risk;
-          if (command && context.component && !context.isUploadLike && !context.isTempLike) {
-            adjustedScore = 10;
-            adjustedRisk = 'low';
-          } else if (command && !context.component) {
-            adjustedScore = Math.max(adjustedScore, 35);
-            adjustedRisk = 'medium';
-          }
+          const { adjustedScore, adjustedRisk } = adjustRuleForContext(rule, context);
           addReason(reasons, { label, risk: adjustedRisk, score: adjustedScore, line: lineNum, snippet: line.slice(0, 160).trim() });
           score += adjustedScore;
         }
@@ -233,8 +283,9 @@ async function scanFile(filePath) {
     }
 
     for (const reason of detectObfuscation(content)) {
-      addReason(reasons, reason);
-      score += reason.score;
+      const { adjustedScore, adjustedRisk } = adjustRuleForContext(reason, context);
+      addReason(reasons, { ...reason, score: adjustedScore, risk: adjustedRisk });
+      score += adjustedScore;
     }
   } catch (_) {
     // unreadable file — skip silently

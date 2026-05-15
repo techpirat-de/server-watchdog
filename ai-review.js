@@ -78,7 +78,14 @@ async function updateAiReview(id, aiReview, notificationsSent = null) {
   await conn.end();
 }
 
-async function getRecentNotification({ sinceMinutes }) {
+function getEnabledNotificationChannels() {
+  const channels = [];
+  if (config.ENABLE_EMAIL_NOTIFIER === 'true') channels.push('email');
+  if (config.ENABLE_TELEGRAM_NOTIFIER === 'true') channels.push('telegram');
+  return channels;
+}
+
+async function getRecentSentChannels({ sinceMinutes }) {
   const mysql = require('mysql2/promise');
   const conn = await mysql.createConnection({
     host:     process.env.DB_HOST || '127.0.0.1',
@@ -102,28 +109,20 @@ async function getRecentNotification({ sinceMinutes }) {
 
   await conn.end();
 
+  const sentChannels = new Set();
   for (const row of rows) {
     const notifications = typeof row.notifications_sent === 'string'
       ? JSON.parse(row.notifications_sent || '[]')
       : row.notifications_sent || [];
 
-    const sent = notifications.some((n) => n.status === 'sent' || n.status === 'partial');
-    if (!sent) continue;
-
-    const ai = row.ai_review
-      ? (typeof row.ai_review === 'string' ? JSON.parse(row.ai_review) : row.ai_review)
-      : null;
-
-    return {
-      id: row.id,
-      timestamp: row.timestamp,
-      risk: ai?.risk || row.overall_risk,
-      summary: ai?.response?.summary || null,
-      notifications,
-    };
+    for (const notification of notifications) {
+      if (notification.status === 'sent' || notification.status === 'partial') {
+        sentChannels.add(notification.channel);
+      }
+    }
   }
 
-  return null;
+  return sentChannels;
 }
 
 // ── Shared AI review input ───────────────────────────────────────────────────
@@ -165,7 +164,7 @@ function buildHourlyReport(reports, worstRisk) {
 
 // ── Notifications ─────────────────────────────────────────────────────────────
 
-async function sendNotifications(aiResult, latestReport) {
+async function sendNotifications(aiResult, latestReport, { skipChannels = new Set() } = {}) {
   const notifyReport = {
     timestamp:        new Date().toISOString(),
     hostname:         config.SERVER_NAME,
@@ -176,6 +175,13 @@ async function sendNotifications(aiResult, latestReport) {
   };
 
   for (const [name, notifier] of [['email', emailNotifier], ['telegram', telegramNotifier]]) {
+    if (skipChannels.has(name)) {
+      const result = { channel: name, status: 'skipped', reason: `already notified within ${config.AI_NOTIFY_COOLDOWN_MINUTES} min` };
+      notifyReport.notificationsSent.push(result);
+      console.log(`[ai-review] ${name} notification skipped: ${result.reason}`);
+      continue;
+    }
+
     try {
       const result = await notifier.send(notifyReport, config);
       notifyReport.notificationsSent.push(result || { channel: name, status: 'unknown' });
@@ -196,6 +202,11 @@ async function sendNotifications(aiResult, latestReport) {
 
 async function shouldSendNotification(aiResult, latestReport) {
   const minRisk = config.AI_NOTIFY_MIN_RISK;
+  const enabledChannels = getEnabledNotificationChannels();
+  if (enabledChannels.length === 0) {
+    return { send: false, reason: 'no notification channels enabled' };
+  }
+
   if (aiResult.notify !== true) {
     return { send: false, reason: `AI notify=false` };
   }
@@ -204,18 +215,23 @@ async function shouldSendNotification(aiResult, latestReport) {
     return { send: false, reason: `risk ${aiResult.risk} below notification threshold ${minRisk}` };
   }
 
-  const recent = await getRecentNotification({
+  const recentSentChannels = await getRecentSentChannels({
     sinceMinutes: config.AI_NOTIFY_COOLDOWN_MINUTES,
   });
 
-  if (recent) {
+  const missingChannels = enabledChannels.filter((channel) => !recentSentChannels.has(channel));
+  if (missingChannels.length === 0) {
     return {
       send: false,
-      reason: `already notified within ${config.AI_NOTIFY_COOLDOWN_MINUTES} min (report id=${recent.id})`,
+      reason: `all enabled channels already notified within ${config.AI_NOTIFY_COOLDOWN_MINUTES} min`,
     };
   }
 
-  return { send: true, reason: 'AI requested notification and cooldown is clear' };
+  return {
+    send: true,
+    reason: 'AI requested notification and at least one channel is outside cooldown',
+    skipChannels: new Set(enabledChannels.filter((channel) => recentSentChannels.has(channel))),
+  };
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -285,7 +301,7 @@ async function main() {
 
   const notificationDecision = await shouldSendNotification(aiResult, latestReport);
   if (notificationDecision.send) {
-    const notificationsSent = await sendNotifications(aiResult, latestReport);
+    const notificationsSent = await sendNotifications(aiResult, latestReport, { skipChannels: notificationDecision.skipChannels });
     await updateAiReview(latestReport.id, { status: 'ok', risk: aiResult.risk, findings: aiCheck.findings, response: aiResult }, notificationsSent);
   } else {
     const notificationsSent = [{ channel: 'all', status: 'skipped', reason: notificationDecision.reason }];

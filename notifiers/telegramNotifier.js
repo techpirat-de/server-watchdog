@@ -9,23 +9,23 @@ function buildMessage(report) {
   const ai = report.aiReview?.response || null;
   const actions = Array.isArray(ai?.recommended_actions) ? ai.recommended_actions.filter(Boolean).slice(0, 3) : [];
   const lines = [
-    `${emoji} *Plesk Server Watchdog* - ${RISK_LABELS[report.overallRisk] || report.overallRisk}`,
-    `Host: \`${report.hostname}\``,
+    `${emoji} Plesk Server Watchdog - ${RISK_LABELS[report.overallRisk] || report.overallRisk}`,
+    `Host: ${report.hostname}`,
     `Zeit: ${report.timestamp}`,
     '',
   ];
 
   if (ai?.summary) {
-    lines.push(`*Kurzfazit:* ${ai.summary}`);
+    lines.push(`Kurzfazit: ${ai.summary}`);
   }
   if (ai?.likely_cause) {
-    lines.push(`*Ursache:* ${ai.likely_cause}`);
+    lines.push(`Ursache: ${ai.likely_cause}`);
   }
   if (ai?.trend) {
-    lines.push(`*Trend:* ${TREND_LABELS[ai.trend] || ai.trend}`);
+    lines.push(`Trend: ${TREND_LABELS[ai.trend] || ai.trend}`);
   }
   if (actions.length) {
-    lines.push('', '*Nächste Schritte:*');
+    lines.push('', 'Nächste Schritte:');
     actions.forEach((action, idx) => lines.push(`${idx + 1}. ${action}`));
   }
 
@@ -38,7 +38,7 @@ function buildMessage(report) {
   }
 
   if (findingLines.length) {
-    lines.push('', '*Auffällige Checks:*', ...findingLines.slice(0, 6));
+    lines.push('', 'Auffällige Checks:', ...findingLines.slice(0, 6));
   }
 
   return lines.join('\n');
@@ -61,7 +61,6 @@ async function send(report, config) {
     body: JSON.stringify({
       chat_id: config.TELEGRAM_CHAT_ID,
       text: buildMessage(report),
-      parse_mode: 'Markdown',
     }),
     timeout: 10000,
   });
