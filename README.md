@@ -1,7 +1,7 @@
 # Plesk Server Watchdog
 
 Automatisiertes Monitoring-Tool für Debian-/Plesk-Server.
-Es überwacht Mail-Queue, Mail-Logs, verdächtige PHP-Dateien und Serverlast, speichert Reports in MySQL und kann optional per KI bewerten, ob echte Maßnahmen nötig sind.
+Es überwacht Mail-Queue, Mail-Logs, verdächtige PHP-Dateien, Serverlast und WordPress-Installationen, speichert Reports in MySQL und kann optional per KI bewerten, ob echte Maßnahmen nötig sind.
 
 ---
 
@@ -10,9 +10,10 @@ Es überwacht Mail-Queue, Mail-Logs, verdächtige PHP-Dateien und Serverlast, sp
 - Frühzeitig erkennen, ob eine Webseite kompromittiert wurde oder Spam verschickt
 - Mail-Queue und Mail-Log automatisch auswerten
 - Verdächtige PHP-Dateien mit Risiko-Score, Hash, Änderungsdatum und WordPress-/Plugin-Kontext aufspüren
+- Alle WordPress-Installationen auf Sicherheits-Plugins, Risiko-Plugins, xmlrpc.php und PHP in Upload-Ordnern prüfen
 - Serverlast im Blick behalten
 - Berichte zentral in MySQL speichern
-- Bei echten Problemen per E-Mail oder Telegram benachrichtigen
+- Bei echten Problemen per E-Mail oder Telegram benachrichtigen (mit Trend-Analyse)
 - Wiederholte Benachrichtigungen per Cooldown unterdrücken
 
 ---
@@ -22,7 +23,8 @@ Es überwacht Mail-Queue, Mail-Logs, verdächtige PHP-Dateien und Serverlast, sp
 - Node.js >= 18
 - MySQL oder MariaDB
 - `postqueue` oder `mailq` muss auf dem Server verfügbar sein
-- Lesezugriff auf `/var/log/mail.log` und `/var/www/vhosts/`
+- Lesezugriff auf `/var/log/maillog` (oder `/var/log/mail.log`) und `/var/www/vhosts/`
+- `curl` muss installiert sein (für den xmlrpc.php-Probe im WordPress-Check)
 - Empfohlen: als `root` oder mit entsprechenden Berechtigungen laufen lassen
 
 ---
@@ -49,7 +51,7 @@ cd plesk-server-watchdog
 
 ## Datenbank vorbereiten
 
-Lege eine Datenbank und einen Benutzer an, zum Beispiel:
+Lege eine Datenbank und einen Benutzer an:
 
 ```sql
 CREATE DATABASE server_watchdog CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
@@ -58,10 +60,16 @@ GRANT ALL PRIVILEGES ON server_watchdog.* TO 'server_watchdog'@'localhost';
 FLUSH PRIVILEGES;
 ```
 
-Trage die Zugangsdaten anschließend in `.env` ein und erstelle die Tabelle:
+Trage die Zugangsdaten in `.env` ein und erstelle die Tabelle:
 
 ```bash
 npm run setup-db
+```
+
+Bei bestehender Installation (Migration für `notifications_sent`-Spalte):
+
+```sql
+ALTER TABLE reports ADD COLUMN IF NOT EXISTS notifications_sent JSON DEFAULT NULL;
 ```
 
 ---
@@ -79,7 +87,7 @@ MAIL_QUEUE_CRITICAL_THRESHOLD=100
 CHECK_INTERVAL_MINUTES=60
 
 # Pfade (Plesk-Standard)
-MAIL_LOG_PATH=/var/log/mail.log
+MAIL_LOG_PATH=/var/log/maillog
 VHOSTS_PATH=/var/www/vhosts
 
 # PHP-Datei-Scan: Dateien der letzten X Stunden
@@ -143,9 +151,67 @@ Wenn Checks wegen Berechtigungen fehlschlagen, starte den Watchdog auf dem Serve
 
 ---
 
-## KI-Review testen
+## WordPress-Check
 
-KI-Review ist optional. Aktiviere ihn in `.env`:
+Der `wordpressCheck` findet automatisch alle WordPress-Installationen unter `VHOSTS_PATH` und bewertet sie nach diesen Kriterien:
+
+| Befund | Risiko |
+|--------|--------|
+| PHP-Datei in `wp-content/uploads/` | CRITICAL |
+| WP File Manager ohne Security-Plugin | CRITICAL |
+| WP File Manager mit Security-Plugin | HIGH |
+| Anderes Risiko-Plugin (Revolution Slider, Cherry Plugin, WP Symposium) | HIGH |
+| Kein Security-Plugin installiert | MEDIUM |
+| xmlrpc.php erreichbar (HTTP-Probe) | LOW |
+| WP_DEBUG=true | LOW |
+
+**Erkannte Security-Plugins:** Wordfence, Sucuri, iThemes Security, WP Cerber, Shield Security, BulletProof Security, Loginizer, WPS Hide Login
+
+**Erkannte Risiko-Plugins:** WP File Manager, File Manager Advanced, Revolution Slider, Cherry Plugin, WP Symposium
+
+Der Check probiert via HTTP-GET, ob `xmlrpc.php` auf jeder Domain erreichbar ist. Die Domain wird aus `wp-config.php` (`WP_HOME` / `WP_SITEURL`) oder dem Ordnernamen abgeleitet.
+
+Im Dashboard werden alle Installationen als aufklappbare Karten gruppiert — mit Risiko-Badge, Plugin-Status und konkreten Befunden pro Site.
+
+---
+
+## Suspicious-Files-Heuristik
+
+Der PHP-Datei-Scanner ist eine Heuristik und kein Malware-Beweis. Der Scanner bewertet mehrere Faktoren gemeinsam:
+
+- exakter Dateipfad und WordPress-Kontext (Core, Plugin, Theme, Upload, Cache, Temp)
+- SHA-256-Hash, Änderungsdatum und Alter der Datei
+- Risiko-Score pro Datei (jedes Pattern-Label trägt **maximal einmal** zum Score bei, egal wie oft es in einer Datei vorkommt)
+- konkrete Gründe, z.B. Webshell-Muster, Obfuskation, Remote-Download-Kombination
+
+**Whitelists:**
+
+- **Security-Plugins** (Wordfence, Sucuri, iThemes, Shield, BulletProof, Cerber, AIOS): Alle Scores werden auf LOW gekappt. WAF-Code, eval, base64, `php://input` sind dort erwartetes Verhalten. Ausnahmen: POST/GET-Command-Execution und Crypto-Miner.
+- **Bekannte große Plugins** (WooCommerce, Elementor, Yoast, Jetpack, Contact Form 7 u.a.): Scores werden auf maximal MEDIUM gekappt, sofern kein echter Red-Flag-Befund vorliegt.
+- **Alle Plugin-/Theme-Dateien:** Ohne kritische Signale maximal HIGH. Ältere Dateien (> 30 Tage) werden weiter heruntergestuft.
+
+**Ignorierte Pfade (Standard):**
+- `/wp-content/wflogs/` (Wordfence-Logs)
+- `/wp-content/uploads/cache/`
+
+Weitere Ausschlüsse können via `SUSPICIOUS_FILES_EXCLUDE` (kommagetrennte Pfadteile) konfiguriert werden.
+
+Richtwerte:
+
+| Risiko | Beispiele |
+|--------|-----------|
+| LOW | Remote URL, lange Codezeile, Callback in bekanntem Plugin-Kontext |
+| MEDIUM | Unbekannte Datei mit Command-Funktion, Datei in Cache/Temp, mehrere schwache Signale |
+| HIGH | Obfuskation, `php://input`, Remote-Download mit Ausführungshinweis |
+| CRITICAL | PHP in Upload/Media, `eval(base64_decode())`, POST/GET-Command Execution, Crypto-Miner |
+
+Wichtig: Ein Fund bedeutet „prüfen", nicht automatisch „löschen". Vor Löschungen immer Backup, Hash, Pfad und Plugin-Zuordnung prüfen.
+
+---
+
+## KI-Review
+
+KI-Review ist optional und analysiert alle Reports der letzten Stunde. Aktiviere ihn in `.env`:
 
 ```env
 ENABLE_AI_REVIEW=true
@@ -158,11 +224,56 @@ Dann:
 npm run ai-review
 ```
 
-Die KI analysiert die Reports der letzten Stunde. Benachrichtigungen werden nur gesendet, wenn:
+Für Testläufe erzwingen (analysiert auch bei LOW-Risiko):
+
+```bash
+npm run ai-review -- --force
+```
+
+Die KI liefert eine deutsche Zusammenfassung mit Risiko-Einschätzung, Trend-Bewertung und konkreten Empfehlungen. Zusätzlich berechnet `ai-review.js` einen **Trend** über die Reports der letzten Stunde:
+
+- Risiko-Veränderung (z.B. CRITICAL → HIGH)
+- Anzahl neuer oder weniger auffälliger PHP-Dateien
+- WordPress-Installationen ohne Security-Plugin (neu/behoben)
+- Mail-Queue-Entwicklung
+
+Benachrichtigungen werden nur gesendet, wenn:
 
 - die KI `notify=true` setzt
 - das KI-Risiko mindestens `AI_NOTIFY_MIN_RISK` erreicht
-- innerhalb von `AI_NOTIFY_COOLDOWN_MINUTES` noch keine Meldung gesendet wurde
+- innerhalb von `AI_NOTIFY_COOLDOWN_MINUTES` noch keine Meldung gesendet wurde (per Kanal getrennt)
+
+---
+
+## Telegram-Benachrichtigungen
+
+Die Telegram-Nachricht ist priorisiert und gefiltert aufgebaut:
+
+1. **Wichtigste Aktion** — PHP in Uploads → Risiko-Plugin → kritische Datei → KI-Empfehlung
+2. **Weitere Hinweise** — max. 3 Items; xmlrpc-Befunde werden zu einer Zeile aggregiert; reine Plugin-Boilerplate-Muster (Remote URL, WordPress HTTP API, curl etc.) werden als Hinweis mit Vermerk „vermutlich normaler Plugin-Code" ausgegeben statt als Alarm
+3. **Status** — was sauber ist (Mail-Queue leer, Serverlast normal, ...)
+4. **Verlauf** — Trend-Zusammenfassung der letzten Stunde mit Pfeil (↘ verbessert / ↗ verschlechtert / → stabil)
+
+Beispiel:
+
+```
+🔴 Plesk Server Watchdog - Hoch
+Host: mein-server.example.com
+
+Kurzfazit: WP File Manager auf physiotherapie-beispiel.de stellt ein hohes Risiko dar.
+
+Wichtigste Aktion:
+wp-file-manager auf physiotherapie-beispiel.de entfernen oder deaktivieren.
+
+Weitere Hinweise:
+- physiotherapie-beispiel.de: kein Security-Plugin (Wordfence o.ä.) installiert.
+- xmlrpc.php auf 2 WordPress-Installationen vorhanden. Blockierung empfohlen.
+
+Status: Mailqueue leer, Mail-Log sauber, Serverlast normal
+
+Verlauf (12 Läufe, → stabil):
+  · Security-Plugin auf 1 Site(s) installiert
+```
 
 ---
 
@@ -180,7 +291,7 @@ Oder alle 30 Minuten (dann auch `CHECK_INTERVAL_MINUTES=30` setzen):
 */30 * * * * cd /opt/plesk-server-watchdog && /usr/bin/node monitor.js >> /opt/plesk-server-watchdog/logs/watchdog.log 2>&1
 ```
 
-KI-Review nach jedem Monitor-Lauf, zum Beispiel fünf Minuten später:
+KI-Review nach jedem Monitor-Lauf, fünf Minuten später:
 
 ```cron
 5 * * * * cd /opt/plesk-server-watchdog && /usr/bin/node ai-review.js >> /opt/plesk-server-watchdog/logs/ai-review.log 2>&1
@@ -217,44 +328,15 @@ Danach ist das Dashboard lokal erreichbar:
 http://127.0.0.1:3000
 ```
 
-Für öffentlichen Zugriff sollte ein Reverse Proxy mit HTTPS und zusätzlicher Zugriffsbeschränkung genutzt werden. Das Dashboard sollte nicht ungeschützt ins Internet gestellt werden.
+**Features:**
 
----
+- **Auto-Refresh**: Das Dashboard prüft alle 60 Sekunden, ob ein neuer Report vorliegt, und lädt automatisch nach — sichtbar am blinkenden Live-Indikator oben rechts.
+- **WordPress-Karte**: Alle Installationen werden als aufklappbare Karten angezeigt, mit Risiko-Badge, Security-Plugin-Status und konkreten Befunden (xmlrpc, WP_DEBUG, Risiko-Plugins, PHP in Uploads).
+- **KI-Analyse-Button**: Startet `ai-review.js` manuell und zeigt die Script-Ausgabe live im Dashboard. Nützlich für Tests außerhalb des Cronjob-Zyklus.
+- **Benachrichtigungs-Button**: Sendet manuell eine Test-Benachrichtigung per E-Mail/Telegram mit dem aktuellen Stand.
+- **Report-Historie**: Tabellarische Übersicht der letzten Reports mit Risiko-Badge, Zeitstempel und Detailansicht.
 
-## Suspicious-Files-Heuristik
-
-Der PHP-Datei-Scanner ist eine Heuristik und kein Malware-Beweis. Einzelne Funktionen wie `system()`, `exec()` oder `shell_exec()` sind nicht automatisch kritisch, weil sie in Backup-, Cache-, Security-, Image- oder Cron-Plugins legitim vorkommen können.
-
-Der Scanner bewertet deshalb mehrere Faktoren gemeinsam:
-
-- exakter Dateipfad
-- SHA-256-Hash
-- Änderungsdatum und Alter der Datei
-- Dateigröße
-- WordPress-Kontext: Core, Plugin, Theme, Upload, Cache, Temp
-- Plugin-/Theme-Slug, falls aus dem Pfad ableitbar
-- Risiko-Score pro Datei
-- konkrete Gründe, zum Beispiel Webshell-Muster, Obfuskation oder Remote-Download
-- Dateialter: ältere unveränderte Plugin-/Theme-Dateien werden weniger aggressiv bewertet
-
-Standardmäßig werden sehr laute WordPress-Pfade niedriger priorisiert oder ignoriert:
-
-- `/wp-content/wflogs/` wird ignoriert
-- `/wp-content/uploads/cache/` wird ignoriert
-- Cache-Pfade wie `wp-content/cache` werden ohne zusätzliche Malware-Indikatoren niedrig bewertet
-
-Richtwerte:
-
-| Risiko   | Beispiele |
-|----------|-----------|
-| LOW      | Remote URL, lange Codezeile, Callback/variable Funktion oder einzelne Command-Funktion in bekanntem Plugin-/Theme-Kontext |
-| MEDIUM   | Unbekannte PHP-Datei mit Command-Funktion, Datei in Cache/Temp, mehrere schwache Signale kombiniert |
-| HIGH     | Obfuskation, `php://input`, Remote Download mit Ausführungshinweis, PHP-Dateien außerhalb erwarteter Plugin-Struktur |
-| CRITICAL | PHP in Upload/Media, Webshell-Muster, `eval(base64_decode())`, POST/GET-basierte Command Execution, Crypto-Miner-Hinweise |
-
-Bekannte Plugin-/Theme-/Language-Dateien werden ohne starke Malware-Signale maximal als `HIGH` bewertet. Einzelne Command-Funktionen wie `system()` oder `exec()` in bekanntem Plugin-Kontext reichen alleine nicht für `CRITICAL`.
-
-Wichtig: Ein Fund bedeutet zunächst „prüfen“, nicht automatisch „löschen“. Vor Löschungen immer Backup, Hash, Pfad und Plugin-Zuordnung prüfen.
+Für öffentlichen Zugriff einen Reverse Proxy mit HTTPS und zusätzlicher Zugriffsbeschränkung nutzen.
 
 ---
 
@@ -269,37 +351,12 @@ Wichtig: Ein Fund bedeutet zunächst „prüfen“, nicht automatisch „lösche
 
 ## Risiko-Level
 
-| Level    | Bedeutung                                                               |
-|----------|-------------------------------------------------------------------------|
-| LOW      | Kleine Auffälligkeiten, kein Handlungsbedarf                            |
-| MEDIUM   | Mehrere Warnungen — beobachten, prüfen                                  |
-| HIGH     | Mailqueue wächst, Bounces, verdächtige PHP-Dateien — zeitnah eingreifen |
-| CRITICAL | Sehr große Queue, neue PHP in Uploads, Reputation-Fehler — sofort handeln |
-
----
-
-## Beispielausgabe (Konsole)
-
-```
-[monitor] ===== Plesk Server Watchdog starting at 2024-05-13T10:00:00.000Z =====
-[monitor] Host: mein-server.example.com
-[monitor] Running check: mailQueue
-[monitor] Running check: mailLog
-[monitor] Running check: suspiciousFiles
-[monitor] Running check: serverLoad
-
-[monitor] ===== RESULTS =====
-[monitor] Overall Risk: HIGH
-  ⚠ mailQueue: warning (risk: high) — 1 finding(s)
-      → Mail queue elevated: 45 messages
-  ✓ mailLog: ok (risk: low) — 0 finding(s)
-  ✗ suspiciousFiles: error (risk: critical) — 2 finding(s)
-      → suspicious_file: /var/www/vhosts/.../uploads/shell.php
-  ✓ serverLoad: ok (risk: low) — 0 finding(s)
-
-[monitor] Report saved to MySQL (id=123)
-[monitor] Done in 4.3s — notifications handled by ai-review.js
-```
+| Level | Bedeutung |
+|-------|-----------|
+| LOW | Kleine Auffälligkeiten, kein Handlungsbedarf |
+| MEDIUM | Mehrere Warnungen — beobachten, prüfen |
+| HIGH | Mailqueue wächst, Bounces, verdächtige PHP-Dateien, Risiko-Plugin — zeitnah eingreifen |
+| CRITICAL | PHP in Uploads, `eval(base64_decode())`, Webshell, WP File Manager ohne Security-Plugin — sofort handeln |
 
 ---
 
@@ -307,8 +364,9 @@ Wichtig: Ein Fund bedeutet zunächst „prüfen“, nicht automatisch „lösche
 
 - Plesk speichert Webspaces unter `/var/www/vhosts/<domain>/httpdocs/`
 - Postfix ist Standard-MTA — `postqueue -p` funktioniert auf Plesk-Servern
-- Mail-Log liegt meist unter `/var/log/mail.log` (Debian) oder `/var/log/maillog` (CentOS)
+- Mail-Log liegt auf Plesk/Debian unter `/var/log/maillog` (wird automatisch erkannt, Fallback auf `/var/log/mail.log`)
 - Bei Berechtigungsproblemen: Watchdog als `root` via Cronjob laufen lassen
+- Der WordPress-Check liest `wp-config.php` direkt vom Dateisystem — Root-Zugriff empfohlen
 - Für Plesk-Deployments: Repository in Plesk-Git-Deployment einbinden, Post-Deploy-Hook `npm install` ausführen lassen
 
 ---
@@ -317,19 +375,28 @@ Wichtig: Ein Fund bedeutet zunächst „prüfen“, nicht automatisch „lösche
 
 ```
 plesk-server-watchdog/
-├── monitor.js              # Haupt-Einstiegspunkt
+├── monitor.js              # Haupt-Einstiegspunkt, startet alle Checks
+├── ai-review.js            # KI-Review + Benachrichtigungs-Versand
+├── setup-db.js             # Legt die reports-Tabelle in MySQL an
 ├── package.json
 ├── .env.example
 ├── .gitignore
 ├── README.md
 ├── checks/
-│   ├── mailQueue.js        # Mail-Queue-Analyse
-│   ├── mailLog.js          # Mail-Log-Auswertung
-│   ├── suspiciousFiles.js  # PHP-Datei-Scanner
+│   ├── mailQueue.js        # Mail-Queue-Analyse (postqueue/mailq)
+│   ├── mailLog.js          # Mail-Log-Auswertung (SMTP-Fehler, Bounces)
+│   ├── suspiciousFiles.js  # PHP-Datei-Scanner mit Kontext-Scoring
 │   ├── serverLoad.js       # CPU/RAM/Disk/Prozesse
-│   └── aiReview.js         # Optionale KI-Auswertung
+│   ├── wordpressCheck.js   # WordPress-Sicherheitscheck (Plugins, xmlrpc, Uploads)
+│   └── aiReview.js         # OpenAI-Anbindung für KI-Analyse
 ├── notifiers/
 │   ├── emailNotifier.js    # SMTP-Benachrichtigung
-│   └── telegramNotifier.js # Telegram-Benachrichtigung
+│   └── telegramNotifier.js # Telegram-Benachrichtigung (priorisiert, Trend-Abschnitt)
+├── web/
+│   ├── server.js           # Express-Server für das Dashboard
+│   └── public/
+│       ├── index.html      # Dashboard-HTML
+│       ├── app.js          # Dashboard-Logik (Auto-Refresh, WordPress-Karte, KI-Button)
+│       └── style.css       # Dark-Theme-Styling
 └── logs/                   # Cronjob-Logs (gitignored)
 ```

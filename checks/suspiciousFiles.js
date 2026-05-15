@@ -198,9 +198,12 @@ function addReason(reasons, reason) {
 
 function isLikelyRandomPhpName(filePath) {
   const base = path.basename(filePath, '.php');
-  if (base.length < 8) return false;
-  if (/^[a-f0-9]{8,}$/i.test(base)) return true;
-  if (/^[a-z0-9]{10,}$/i.test(base) && !/[aeiou]{2}/i.test(base)) return true;
+  if (base.length < 10) return false;
+  if (/^[a-f0-9]{10,}$/i.test(base)) return true; // pure hex hash
+  if (base.length >= 12 && /^[a-z0-9]+$/i.test(base)) {
+    const vowelRatio = (base.match(/[aeiou]/gi) || []).length / base.length;
+    if (vowelRatio < 0.20) return true; // <20% vowels = likely random
+  }
   return false;
 }
 
@@ -341,6 +344,8 @@ async function scanFile(filePath) {
   const ageHours = Math.max(0, Math.round(((Date.now() - stat.mtime.getTime()) / 3_600_000) * 10) / 10);
   const sha256 = await hashFile(filePath);
   let score = 0;
+  const scoredLabels = new Set();
+  const addScoreOnce = (label, s) => { if (!scoredLabels.has(label)) { score += s; scoredLabels.add(label); } };
 
   if (context.isSystemTemp && /^php/i.test(path.basename(filePath))) {
     addReason(reasons, { label: 'PHP-Datei in System-Temp-Verzeichnis', risk: 'critical', score: 100 });
@@ -377,7 +382,7 @@ async function scanFile(filePath) {
             r = 'low';
           }
           addReason(reasons, { label: rule.label, risk: r, score: s, line: lineNum, snippet: line.slice(0, 160).trim() });
-          score += s;
+          addScoreOnce(rule.label, s);
         }
       }
       for (const rule of CONTEXTUAL_RULES) {
@@ -385,7 +390,7 @@ async function scanFile(filePath) {
         if (pattern.test(line)) {
           const { adjustedScore, adjustedRisk } = adjustRuleForContext(rule, context);
           addReason(reasons, { label, risk: adjustedRisk, score: adjustedScore, line: lineNum, snippet: line.slice(0, 160).trim() });
-          score += adjustedScore;
+          addScoreOnce(label, adjustedScore);
         }
       }
       if (lineNum > 2000) break; // don't scan gigantic files line-by-line
@@ -394,7 +399,7 @@ async function scanFile(filePath) {
     for (const reason of detectObfuscation(content)) {
       const { adjustedScore, adjustedRisk } = adjustRuleForContext(reason, context);
       addReason(reasons, { ...reason, score: adjustedScore, risk: adjustedRisk });
-      score += adjustedScore;
+      addScoreOnce(reason.label, adjustedScore);
     }
   } catch (_) {
     // unreadable file — skip silently
