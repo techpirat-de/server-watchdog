@@ -121,11 +121,14 @@ async function check(config) {
     const totalOut = result.metrics.sent + result.metrics.deferred;
     const bounceRatio = totalOut > 0 ? result.metrics.bounced / totalOut : 0;
 
-    if (result.metrics.rejected > 50 || bounceRatio > 0.3) {
+    // Require minimum volume before bounce ratio is statistically meaningful
+    const significantVolume = totalOut >= 10;
+
+    if (result.metrics.rejected > 50 || (significantVolume && bounceRatio > 0.3)) {
       result.risk = 'high';
       result.status = 'warning';
       result.findings.push({ type: 'high_reject_rate', message: `${result.metrics.rejected} rejections, bounce ratio ${(bounceRatio * 100).toFixed(1)}%` });
-    } else if (result.metrics.rejected > 10 || result.metrics.bounced > 20) {
+    } else if (result.metrics.rejected > 10 || result.metrics.bounced > 20 || (significantVolume && bounceRatio > 0.15)) {
       result.risk = 'medium';
       result.status = 'warning';
       result.findings.push({ type: 'elevated_bounces', message: `${result.metrics.bounced} bounced, ${result.metrics.rejected} rejected in last ${config.CHECK_INTERVAL_MINUTES} min` });

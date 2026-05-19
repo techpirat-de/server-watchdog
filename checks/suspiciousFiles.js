@@ -30,6 +30,7 @@ const TRUSTED_POPULAR_PLUGINS = new Set([
   'yoast-seo', 'wordpress-seo', 'contact-form-7', 'wpforms-lite',
   'advanced-custom-fields', 'acf', 'jetpack', 'gutenberg',
   'the-events-calendar', 'bbpress', 'buddypress', 'mailchimp-for-woocommerce',
+  'creame-whatsapp-me', 'joinchat',
 ]);
 
 // Patterns that are always real red flags regardless of plugin
@@ -242,7 +243,7 @@ function adjustRuleForContext(rule, context) {
       // shell_exec/system/exec in WP code is unusual → MEDIUM, not LOW
       adjustedScore = Math.min(adjustedScore, 35);
       adjustedRisk = 'medium';
-    } else if (rule.reducibleInWp || ['Remote URL im Code', 'WordPress HTTP API', 'curl_exec()', 'Variable Funktion', 'call_user_func()', 'Sehr lange Codezeile', 'Langer Base64-ähnlicher String'].includes(rule.label)) {
+    } else if (rule.reducibleInWp || ['Remote URL im Code', 'WordPress HTTP API', 'curl_exec()', 'Variable Funktion', 'call_user_func()', 'Sehr lange Codezeile', 'Langer Base64-ähnlicher String', 'Variable Variablen'].includes(rule.label)) {
       adjustedScore = Math.min(adjustedScore, 5);
       adjustedRisk = 'low';
     }
@@ -332,7 +333,12 @@ function buildMessage(scan) {
   const context = scan.context.component
     ? `${scan.context.componentType}:${scan.context.component}`
     : scan.context.area;
-  const topReasons = scan.reasons.slice(0, 3).map((r) => r.label).join(', ');
+  const seen = new Set();
+  const topReasons = scan.reasons
+    .map((r) => r.label)
+    .filter((l) => { if (seen.has(l)) return false; seen.add(l); return true; })
+    .slice(0, 3)
+    .join(', ');
   return `${scan.risk.toUpperCase()} Score ${scan.score}: ${scan.filePath} (${context}) - ${topReasons}`;
 }
 
