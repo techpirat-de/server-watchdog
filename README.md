@@ -33,36 +33,19 @@ Es überwacht Mail-Queue, Mail-Logs, verdächtige PHP-Dateien, Serverlast und Wo
 
 ```bash
 cd /opt
-git clone https://github.com/techpirat-de/plesk-server-watchdog.git
-cd plesk-server-watchdog
-npm install
-cp .env.example .env
-nano .env
-```
-
-Falls das Repository noch unter dem alten Namen geklont wird:
-
-```bash
 git clone https://github.com/techpirat-de/server-watchdog.git plesk-server-watchdog
 cd plesk-server-watchdog
+npm install
+npm run setup
 ```
 
----
+`npm run setup` startet den interaktiven Installations-Wizard. Er erkennt Pfade automatisch, testet die Datenbankverbindung, legt Tabellen an und zeigt am Ende den fertigen Cron-Befehl.
 
-## Datenbank vorbereiten
-
-Lege eine Datenbank und einen Benutzer an:
-
-```sql
-CREATE DATABASE server_watchdog CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE USER 'server_watchdog'@'localhost' IDENTIFIED BY 'BITTE_SICHERES_PASSWORT_SETZEN';
-GRANT ALL PRIVILEGES ON server_watchdog.* TO 'server_watchdog'@'localhost';
-FLUSH PRIVILEGES;
-```
-
-Trage die Zugangsdaten in `.env` ein und erstelle die Tabelle:
+### Manuelle Installation (alternativ)
 
 ```bash
+cp .env.example .env
+nano .env
 npm run setup-db
 ```
 
@@ -377,6 +360,7 @@ Für öffentlichen Zugriff einen Reverse Proxy mit HTTPS und zusätzlicher Zugri
 plesk-server-watchdog/
 ├── monitor.js              # Haupt-Einstiegspunkt, startet alle Checks
 ├── ai-review.js            # KI-Review + Benachrichtigungs-Versand
+├── setup-wizard.js         # Interaktiver Installations-Wizard (npm run setup)
 ├── setup-db.js             # Legt die reports-Tabelle in MySQL an
 ├── package.json
 ├── .env.example
