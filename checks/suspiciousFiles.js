@@ -46,10 +46,19 @@ const REAL_RED_FLAG_LABELS = new Set([
   'Kombination: gzinflate() + Obfuskation',
 ]);
 const RISK_SCORE = { medium: 30, high: 60, critical: 100 };
-const CONTEXT_DIRS = {
-  upload: ['uploads', 'upload', 'files', 'media', 'images'],
-  temp: ['tmp', 'temp', 'cache'],
-};
+
+// Explicit upload/temp path fragments — must match real WordPress write locations, not class/namespace names
+const UPLOAD_PATH_FRAGMENTS = [
+  '/wp-content/uploads/',
+  '/wp-content/cache/',
+  '/wp-content/upgrade/',
+  '/wp-content/tmp/',
+];
+const TEMP_PATH_FRAGMENTS = [
+  '/tmp/',
+  '/var/tmp/',
+  '/dev/shm/',
+];
 const DEFAULT_EXCLUDES = [
   '/wp-content/wflogs/',
   '/wp-content/uploads/cache/',
@@ -176,8 +185,9 @@ function classifyPath(filePath) {
     }
   }
 
-  context.isUploadLike = CONTEXT_DIRS.upload.some((dir) => parts.includes(dir)) && !context.isLowPriorityCache;
-  context.isTempLike = CONTEXT_DIRS.temp.some((dir) => parts.includes(dir)) && !context.isLowPriorityCache;
+  const normalizedPath = normalizePath(filePath);
+  context.isUploadLike = UPLOAD_PATH_FRAGMENTS.some((f) => normalizedPath.includes(f)) && !context.isLowPriorityCache;
+  context.isTempLike = TEMP_PATH_FRAGMENTS.some((f) => normalizedPath.includes(f)) && !context.isSystemTemp;
   return context;
 }
 
@@ -337,21 +347,17 @@ function applyContextCaps(score, reasons, context, metadata, modifiedCoreFiles) 
 
   if (context.isWordPressCore) {
     if (modifiedCoreFiles !== null && !modifiedCoreFiles.has(normalizePath(metadata.filePath))) {
-      // Checksums verified — file is unmodified official WP core, only surface real red flags
-      if (!hasRealRedFlag(reasons)) {
-        cappedScore = Math.min(cappedScore, riskToMaxScore('low'));
-      } else if (!hasCriticalSignal(reasons)) {
-        cappedScore = Math.min(cappedScore, riskToMaxScore('medium'));
-      }
+      // wp-cli confirms file matches official WP — any pattern hit is legitimate code, cap at LOW
+      cappedScore = Math.min(cappedScore, riskToMaxScore('low'));
     } else if (modifiedCoreFiles === null) {
-      // WP-CLI not available — still cap core files tightly, mtime alone is not a signal
+      // WP-CLI not available — cap tightly without confirmation
       if (!hasRealRedFlag(reasons)) {
         cappedScore = Math.min(cappedScore, riskToMaxScore('medium'));
       } else if (!hasCriticalSignal(reasons)) {
         cappedScore = Math.min(cappedScore, riskToMaxScore('high'));
       }
     }
-    // If modifiedCoreFiles has this file: checksum mismatch → full score, no cap
+    // Checksum mismatch → full score, no cap (genuine modification)
   }
 
   if (context.isKnownWordPressCode && !hasCriticalSignal(reasons)) {
