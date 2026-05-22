@@ -41,6 +41,9 @@ const REAL_RED_FLAG_LABELS = new Set([
   'assert($_POST/$_GET)',
   'PHP-Datei in Upload/Media-Verzeichnis',
   'PHP-Datei in System-Temp-Verzeichnis',
+  'Kombination: eval() + base64',
+  'Kombination: Command Execution + Obfuskation',
+  'Kombination: gzinflate() + Obfuskation',
 ]);
 const RISK_SCORE = { medium: 30, high: 60, critical: 100 };
 const CONTEXT_DIRS = {
@@ -209,6 +212,42 @@ function isLikelyRandomPhpName(filePath) {
   return false;
 }
 
+// Returns true when the first match of `pattern` on `line` sits inside a PHP string literal.
+// Heuristic: count unescaped quotes before the match index — odd count → inside a string.
+function isLikelyInPhpString(line, pattern) {
+  const re = new RegExp(pattern.source, pattern.flags.replace(/g/g, ''));
+  const match = re.exec(line);
+  if (!match) return false;
+  const before = line.slice(0, match.index);
+  const sq = (before.match(/(?<!\\)'/g) || []).length;
+  const dq = (before.match(/(?<!\\)"/g) || []).length;
+  return (sq % 2 === 1) || (dq % 2 === 1);
+}
+
+// Detects dangerous pattern combinations that are far more significant than individual scores.
+// Called after all individual rules have been collected.
+function detectDangerousCombinations(reasons) {
+  const labels = new Set(reasons.map((r) => r.label));
+  const combos = [];
+
+  if (labels.has('eval()') && (labels.has('base64_decode()') || labels.has('Langer Base64-ähnlicher String'))) {
+    combos.push({ label: 'Kombination: eval() + base64', score: 65, risk: 'high' });
+  }
+  const hasCommand = ['shell_exec()', 'system()', 'exec()', 'passthru()', 'proc_open()'].some((l) => labels.has(l));
+  const hasObfuscation = ['Variable Variablen', 'Hex/chr-Obfuskation', 'Langer Base64-ähnlicher String'].some((l) => labels.has(l));
+  if (hasCommand && hasObfuscation) {
+    combos.push({ label: 'Kombination: Command Execution + Obfuskation', score: 75, risk: 'high' });
+  }
+  if (labels.has('gzinflate()') && (labels.has('Hex/chr-Obfuskation') || labels.has('base64_decode()'))) {
+    combos.push({ label: 'Kombination: gzinflate() + Obfuskation', score: 70, risk: 'high' });
+  }
+  if (labels.has('Remote Download mit Ausführungshinweis') && labels.has('Variable Variablen')) {
+    combos.push({ label: 'Kombination: Remote Download + Obfuskation', score: 60, risk: 'high' });
+  }
+
+  return combos;
+}
+
 function detectObfuscation(content) {
   const reasons = [];
   if (/[A-Za-z0-9+/]{220,}={0,2}/.test(content)) {
@@ -324,6 +363,11 @@ function applyContextCaps(score, reasons, context, metadata, modifiedCoreFiles) 
     }
   }
 
+  if (context.isWordPressLanguages && !hasRealRedFlag(reasons)) {
+    // Translation files often contain function names as strings — cap unless a real red flag fired
+    cappedScore = Math.min(cappedScore, riskToMaxScore('medium'));
+  }
+
   if (context.isLowPriorityCache && !hasCriticalSignal(reasons)) {
     cappedScore = Math.min(cappedScore, riskToMaxScore('medium'));
   }
@@ -400,6 +444,8 @@ async function scanFile(filePath, modifiedCoreFiles) {
       lineNum++;
       for (const rule of HIGH_CONFIDENCE_RULES) {
         if (rule.pattern.test(line)) {
+          // In translation files, skip patterns that appear inside PHP string literals
+          if (context.isWordPressLanguages && isLikelyInPhpString(line, rule.pattern)) continue;
           let s = rule.score;
           let r = rule.risk;
           if (isSecurityPlugin(context) && !SECURITY_PLUGIN_ALLOWED_HIGH_CONFIDENCE.has(rule.label)) {
@@ -413,6 +459,7 @@ async function scanFile(filePath, modifiedCoreFiles) {
       for (const rule of CONTEXTUAL_RULES) {
         const { pattern, label } = rule;
         if (pattern.test(line)) {
+          if (context.isWordPressLanguages && isLikelyInPhpString(line, pattern)) continue;
           const { adjustedScore, adjustedRisk } = adjustRuleForContext(rule, context);
           addReason(reasons, { label, risk: adjustedRisk, score: adjustedScore, line: lineNum, snippet: line.slice(0, 160).trim() });
           addScoreOnce(label, adjustedScore);
@@ -425,6 +472,11 @@ async function scanFile(filePath, modifiedCoreFiles) {
       const { adjustedScore, adjustedRisk } = adjustRuleForContext(reason, context);
       addReason(reasons, { ...reason, score: adjustedScore, risk: adjustedRisk });
       addScoreOnce(reason.label, adjustedScore);
+    }
+
+    for (const combo of detectDangerousCombinations(reasons)) {
+      addReason(reasons, combo);
+      addScoreOnce(combo.label, combo.score);
     }
   } catch (_) {
     // unreadable file — skip silently
