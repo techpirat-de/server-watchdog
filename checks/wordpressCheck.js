@@ -8,6 +8,20 @@ const path = require('path');
 const execFileAsync = promisify(execFile);
 const RISK_RANK = { low: 0, medium: 1, high: 2, critical: 3 };
 
+const PHP_BINARY_CANDIDATES = [
+  '/opt/plesk/php/8.3/bin/php',
+  '/opt/plesk/php/8.2/bin/php',
+  '/opt/plesk/php/8.1/bin/php',
+  '/opt/plesk/php/7.4/bin/php',
+];
+const WP_CLI_CANDIDATES = ['/usr/local/bin/wp', '/usr/bin/wp'];
+
+// Legacy WP root files removed in old versions — presence is unusual but not malicious
+const UNEXPECTED_ROOT_FILES = [
+  'wp-rss2.php', 'wp-feed.php', 'wp-atom.php', 'wp-register.php',
+  'wp-pass.php', 'wp-rdf.php', 'wp-rss.php', 'wp-commentsrss2.php',
+];
+
 const SECURITY_PLUGINS = [
   { slug: 'wordfence',                           name: 'Wordfence' },
   { slug: 'better-wp-security',                  name: 'iThemes Security' },
@@ -28,6 +42,84 @@ const RISKY_PLUGINS = [
   { slug: 'cherry-plugin',         name: 'Cherry Plugin',          baseRisk: 'high',   score: 65, reason: 'File-Upload / Remote-File-Inclusion' },
   { slug: 'wp-symposium',          name: 'WP Symposium',           baseRisk: 'high',   score: 65, reason: 'Mehrfach kritische Schwachstellen' },
 ];
+
+// ── WP-CLI helpers ────────────────────────────────────────────────────────────
+
+function findPhpBinary() {
+  for (const p of PHP_BINARY_CANDIDATES) {
+    try { require('child_process').execFileSync(p, ['--version'], { stdio: 'ignore', timeout: 3000 }); return p; } catch (_) {}
+  }
+  try { require('child_process').execFileSync('php', ['--version'], { stdio: 'ignore', timeout: 3000 }); return 'php'; } catch (_) {}
+  return null;
+}
+
+function findWpCliBinary() {
+  for (const p of WP_CLI_CANDIDATES) {
+    try { fs.accessSync(p, fs.constants.X_OK); return p; } catch (_) {}
+  }
+  try {
+    const found = require('child_process').execFileSync('which', ['wp'], { encoding: 'utf8', timeout: 3000 }).trim();
+    if (found) return found;
+  } catch (_) {}
+  return null;
+}
+
+function resolveWpCli() {
+  const wpBin = findWpCliBinary();
+  if (!wpBin) return null;
+  return { wpBin, phpBin: findPhpBinary() };
+}
+
+async function runWpVerifyChecksums(wpRoot, wpCliInfo) {
+  const { wpBin, phpBin } = wpCliInfo;
+  const env = phpBin && phpBin !== 'php'
+    ? { ...process.env, PATH: `${path.dirname(phpBin)}:${process.env.PATH || ''}` }
+    : process.env;
+
+  let stdout = '';
+  try {
+    const res = await execFileAsync(wpBin, ['core', 'verify-checksums', '--allow-root', '--format=json'], {
+      cwd: wpRoot, timeout: 30000, maxBuffer: 4 * 1024 * 1024, env,
+    });
+    stdout = res.stdout;
+  } catch (err) {
+    // wp exited non-zero (checksums failed) — stdout still contains JSON
+    stdout = err.stdout || '';
+    // If PHP not in PATH, retry with explicit php
+    if (!stdout && phpBin) {
+      try {
+        const res2 = await execFileAsync(phpBin, [wpBin, 'core', 'verify-checksums', '--allow-root', '--format=json'], {
+          cwd: wpRoot, timeout: 30000, maxBuffer: 4 * 1024 * 1024,
+        });
+        stdout = res2.stdout;
+      } catch (err2) { stdout = err2.stdout || ''; }
+    }
+  }
+
+  const entries = (() => {
+    if (!stdout.trim()) return [];
+    try { return JSON.parse(stdout); } catch (_) { return []; }
+  })();
+
+  const errors        = entries.filter((e) => e.type === 'error').map((e) => e.file_name || e.file || '');
+  const warnings      = entries.filter((e) => e.type === 'warning').map((e) => ({ file: e.file_name || e.file || '', message: e.message || '' }));
+  const unexpectedFiles = warnings.filter((w) => /should not exist/i.test(w.message)).map((w) => w.file);
+
+  return {
+    checksumStatus: errors.length > 0 ? 'failed' : (entries.length > 0 ? 'warnings' : 'ok'),
+    checksumErrors: errors,
+    checksumWarnings: warnings.map((w) => `${w.file}: ${w.message}`),
+    unexpectedFiles,
+    phpBinaryUsed: phpBin || 'php',
+    wpCliPath: wpBin,
+  };
+}
+
+function findUnexpectedRootFiles(wpRoot) {
+  return UNEXPECTED_ROOT_FILES.filter((f) => {
+    try { fs.accessSync(path.join(wpRoot, f), fs.constants.F_OK); return true; } catch (_) { return false; }
+  });
+}
 
 // ── Filesystem helpers ────────────────────────────────────────────────────────
 
@@ -146,7 +238,7 @@ function siteLabel(wpRoot, vhostsPath) {
   return rel.split('/').slice(0, 2).join('/') || wpRoot;
 }
 
-async function analyzeSite(wpRoot, vhostsPath, { enableXmlRpcProbe }) {
+async function analyzeSite(wpRoot, vhostsPath, { enableXmlRpcProbe, wpCliInfo }) {
   const pluginsDir    = path.join(wpRoot, 'wp-content', 'plugins');
   const domain        = extractDomain(wpRoot, vhostsPath);
   const version       = readWpVersion(wpRoot);
@@ -162,6 +254,17 @@ async function analyzeSite(wpRoot, vhostsPath, { enableXmlRpcProbe }) {
     countPhpInUploads(wpRoot),
     (xmlRpcOnDisk && enableXmlRpcProbe && domain) ? probeXmlRpc(domain) : Promise.resolve(xmlRpcOnDisk ? null : false),
   ]);
+
+  // WP-CLI checksum verification
+  let checksumResult = null;
+  if (wpCliInfo) {
+    try { checksumResult = await runWpVerifyChecksums(wpRoot, wpCliInfo); } catch (_) {}
+  }
+
+  // Unexpected legacy root files (from filesystem + checksum warnings)
+  const fsUnexpected = findUnexpectedRootFiles(wpRoot);
+  const checksumUnexpected = checksumResult?.unexpectedFiles || [];
+  const allUnexpected = [...new Set([...fsUnexpected, ...checksumUnexpected])];
 
   const issues = [];
   let score = 0;
@@ -216,6 +319,27 @@ async function analyzeSite(wpRoot, vhostsPath, { enableXmlRpcProbe }) {
     score += 10;
   }
 
+  // Unexpected legacy root files
+  for (const f of allUnexpected) {
+    issues.push({
+      type: 'unexpected_core_adjacent_file',
+      risk: 'low',
+      message: `Unerwartete/veraltete WordPress-Datei: ${f} — sichern und entfernen`,
+      file: f,
+    });
+    score += 5;
+  }
+
+  // Checksum errors (modified core files)
+  if (checksumResult?.checksumErrors?.length) {
+    issues.push({
+      type: 'checksum_error',
+      risk: 'high',
+      message: `${checksumResult.checksumErrors.length} WordPress-Core-Datei(en) weichen vom offiziellen Checksum ab: ${checksumResult.checksumErrors.slice(0, 3).join(', ')}`,
+    });
+    score += 60;
+  }
+
   let risk = 'low';
   if (score >= 100) risk = 'critical';
   else if (score >= 60) risk = 'high';
@@ -233,6 +357,12 @@ async function analyzeSite(wpRoot, vhostsPath, { enableXmlRpcProbe }) {
     xmlRpcExposed,
     debugEnabled,
     issues,
+    checksumStatus:    checksumResult?.checksumStatus   || 'not_checked',
+    checksumErrors:    checksumResult?.checksumErrors   || [],
+    checksumWarnings:  checksumResult?.checksumWarnings || [],
+    unexpectedFiles:   allUnexpected,
+    phpBinaryUsed:     checksumResult?.phpBinaryUsed    || null,
+    wpCliPath:         checksumResult?.wpCliPath        || null,
   };
 }
 
@@ -284,7 +414,8 @@ async function check(config) {
       return result;
     }
 
-    const analyses = await Promise.all(roots.map((r) => analyzeSite(r, vhostsPath, { enableXmlRpcProbe })));
+    const wpCliInfo = resolveWpCli();
+    const analyses = await Promise.all(roots.map((r) => analyzeSite(r, vhostsPath, { enableXmlRpcProbe, wpCliInfo })));
 
     for (const a of analyses) {
       if (a.securityPlugins.length > 0) result.metrics.withSecurityPlugin++;

@@ -93,12 +93,27 @@ function extractSecondaryFindings(checks, topAction) {
     } else if (noSec.length > 1) {
       items.push(`${noSec.length} WordPress-Installationen ohne Security-Plugin.`);
     }
+
+    // Unexpected legacy root files
+    const unexpectedSites = wp.metrics.siteDetails.filter((s) => s.unexpectedFiles?.length > 0);
+    if (unexpectedSites.length === 1) {
+      const files = unexpectedSites[0].unexpectedFiles.slice(0, 3).join(', ');
+      items.push(`Veraltete WP-Dateien auf ${unexpectedSites[0].site}: ${files} — sichern und entfernen.`);
+    } else if (unexpectedSites.length > 1) {
+      items.push(`Veraltete WP-Root-Dateien auf ${unexpectedSites.length} Installationen gefunden — sichern und entfernen.`);
+    }
+
+    // Checksum errors
+    const checksumFailed = wp.metrics.siteDetails.filter((s) => s.checksumStatus === 'failed');
+    if (checksumFailed.length > 0) {
+      items.push(`Core-Checksum-Fehler auf ${checksumFailed.map((s) => s.site).join(', ')} — WP-Core neu installieren.`);
+    }
   }
 
   // 2. Suspicious files — skip pure noise, add note for likely plugin false-positives
   const sf = getCheck(checks, 'suspiciousFiles');
   if (sf) {
-    const realFindings  = sf.findings.filter((f) => (f.risk === 'high' || f.risk === 'critical') && !isNoiseFinding(f));
+    const realFindings  = sf.findings.filter((f) => (f.risk === 'high' || f.risk === 'critical') && !isNoiseFinding(f) && f.type !== 'core_checksum_ok');
     const noiseFindings = sf.findings.filter((f) => isNoiseFinding(f));
 
     for (const f of realFindings.slice(0, 2)) {
@@ -115,6 +130,11 @@ function extractSecondaryFindings(checks, topAction) {
       if (pluginNames.length) {
         items.push(`${pluginNames.join(', ')} enthält auffällige Muster (Remote URLs o.ä.) — vermutlich normaler Plugin-Code. Manuell prüfen.`);
       }
+    }
+
+    const coreOk = sf.findings.find((f) => f.type === 'core_checksum_ok');
+    if (coreOk) {
+      items.push(`Core-Checksums OK: ${coreOk.message}`);
     }
   }
 

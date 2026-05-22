@@ -9,6 +9,14 @@ const readline = require('readline');
 
 const execFileAsync = promisify(execFile);
 
+const PHP_BINARY_CANDIDATES = [
+  '/opt/plesk/php/8.3/bin/php',
+  '/opt/plesk/php/8.2/bin/php',
+  '/opt/plesk/php/8.1/bin/php',
+  '/opt/plesk/php/7.4/bin/php',
+];
+const WP_CLI_CANDIDATES = ['/usr/local/bin/wp', '/usr/bin/wp'];
+
 const RISK_RANK = { low: 0, medium: 1, high: 2, critical: 3 };
 
 // Security plugins legitimately use base64, eval, WAF patterns, crypto, php://input —
@@ -519,39 +527,77 @@ async function findWpInstallations(vhostsPath) {
   }
 }
 
-async function runWpChecksums(wpPath) {
+function findPhpBinary() {
+  for (const p of PHP_BINARY_CANDIDATES) {
+    try { execFileSync(p, ['--version'], { stdio: 'ignore', timeout: 3000 }); return p; } catch (_) {}
+  }
+  try { execFileSync('php', ['--version'], { stdio: 'ignore', timeout: 3000 }); return 'php'; } catch (_) {}
+  return null;
+}
+
+function findWpCliBinary() {
+  for (const p of WP_CLI_CANDIDATES) {
+    try { fs.accessSync(p, fs.constants.X_OK); return p; } catch (_) {}
+  }
   try {
-    const { stdout } = await execFileAsync('wp', [
-      'core', 'verify-checksums', '--allow-root', '--format=json',
-    ], { cwd: wpPath, timeout: 30000, maxBuffer: 4 * 1024 * 1024 });
-    const parsed = JSON.parse(stdout || '[]');
-    return parsed.map((entry) => normalizePath(path.join(wpPath, entry.file)));
+    const found = execFileSync('which', ['wp'], { encoding: 'utf8', timeout: 3000 }).trim();
+    if (found) return found;
+  } catch (_) {}
+  return null;
+}
+
+function resolveWpCli() {
+  const wpBin = findWpCliBinary();
+  if (!wpBin) return null;
+  const phpBin = findPhpBinary();
+  return { wpBin, phpBin };
+}
+
+async function execWpCli({ wpBin, phpBin }, args, cwd) {
+  const env = phpBin && phpBin !== 'php'
+    ? { ...process.env, PATH: `${path.dirname(phpBin)}:${process.env.PATH || ''}` }
+    : process.env;
+  try {
+    const { stdout } = await execFileAsync(wpBin, args, { cwd, timeout: 30000, maxBuffer: 4 * 1024 * 1024, env });
+    return stdout;
   } catch (err) {
-    // wp-cli not installed or returned non-JSON (e.g. "Success: …")
-    if (err.stdout) {
-      try {
-        const parsed = JSON.parse(err.stdout);
-        return parsed.map((entry) => normalizePath(path.join(wpPath, entry.file)));
-      } catch (_) {}
+    // wp may have failed because PHP is not in PATH — retry with explicit php invocation
+    if (phpBin && (err.code === 'ENOENT' || (err.stderr || '').toLowerCase().includes('php'))) {
+      const { stdout } = await execFileAsync(phpBin, [wpBin, ...args], { cwd, timeout: 30000, maxBuffer: 4 * 1024 * 1024 });
+      return stdout;
     }
-    return null; // null = wp-cli unavailable or checksums passed with no output
+    throw err;
+  }
+}
+
+async function runWpChecksums(wpPath, wpCliInfo) {
+  try {
+    const stdout = await execWpCli(wpCliInfo, ['core', 'verify-checksums', '--allow-root', '--format=json'], wpPath);
+    if (!stdout || !stdout.trim()) return []; // empty = all checksums ok
+    return JSON.parse(stdout);
+  } catch (err) {
+    // Non-zero exit from wp — try to parse JSON from stdout
+    if (err.stdout) {
+      try { return JSON.parse(err.stdout); } catch (_) {}
+    }
+    return null; // wp-cli ran but output is unparseable
   }
 }
 
 async function collectModifiedCoreFiles(vhostsPath) {
-  if (!checkWpCli()) return null;
+  const wpCliInfo = resolveWpCli();
+  if (!wpCliInfo) return null;
   const installs = await findWpInstallations(vhostsPath);
   if (installs.length === 0) return null;
   const modified = new Set();
   await Promise.all(installs.map(async (wpPath) => {
-    const files = await runWpChecksums(wpPath);
-    if (files) files.forEach((f) => modified.add(f));
+    const entries = await runWpChecksums(wpPath, wpCliInfo);
+    if (!entries) return;
+    for (const e of entries) {
+      if (e.type === 'error') modified.add(normalizePath(path.join(wpPath, e.file_name || e.file || '')));
+    }
   }));
   return modified;
-}
-
-function checkWpCli() {
-  try { execFileSync('which', ['wp'], { stdio: 'ignore' }); return true; } catch (_) { return false; }
 }
 
 function resolveVhostsPath(configPath) {
@@ -610,8 +656,20 @@ async function check(config) {
 
     const scans = await Promise.all(files.map((f) => scanFile(f, modifiedCoreFiles)));
 
+    let coreHeuristicSuppressed = 0;
     for (const scan of scans) {
-      if (scan.reasons.length === 0 || scan.risk === 'low') continue;
+      if (scan.reasons.length === 0 || scan.risk === 'low') {
+        // Count verified core files that had heuristic hits but were capped to LOW
+        if (
+          scan.context.isWordPressCore &&
+          scan.reasons.length > 0 &&
+          modifiedCoreFiles !== null &&
+          !modifiedCoreFiles.has(normalizePath(scan.filePath))
+        ) {
+          coreHeuristicSuppressed++;
+        }
+        continue;
+      }
       result.metrics.flagged++;
 
       const risk = scan.risk;
@@ -635,6 +693,15 @@ async function check(config) {
       });
 
       if (RISK_RANK[risk] > RISK_RANK[result.risk]) result.risk = risk;
+    }
+
+    if (coreHeuristicSuppressed > 0) {
+      result.metrics.wpCoreHeuristicsSuppressed = coreHeuristicSuppressed;
+      result.findings.push({
+        type: 'core_checksum_ok',
+        risk: 'low',
+        message: `${coreHeuristicSuppressed} WordPress-Core-Heuristik-Treffer ignoriert (Checksums OK)`,
+      });
     }
 
     if (result.metrics.critical > 0) {
