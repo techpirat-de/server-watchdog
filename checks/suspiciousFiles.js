@@ -1,6 +1,6 @@
 'use strict';
 
-const { execFile } = require('child_process');
+const { execFile, execFileSync } = require('child_process');
 const { promisify } = require('util');
 const crypto = require('crypto');
 const fs = require('fs');
@@ -166,7 +166,8 @@ function classifyPath(filePath) {
       context.area = 'wordpress-languages';
       context.componentType = 'languages';
       context.component = slug;
-      context.isKnownWordPressCode = true;
+      context.isWordPressLanguages = true;
+      // Do NOT set isKnownWordPressCode — language files are a known malware target
     } else {
       context.area = 'wordpress-content';
     }
@@ -284,7 +285,7 @@ function hasCriticalSignalForSecPlugin(reasons) {
   return reasons.some((r) => SECURITY_PLUGIN_ALLOWED_HIGH_CONFIDENCE.has(r.label));
 }
 
-function applyContextCaps(score, reasons, context, metadata) {
+function applyContextCaps(score, reasons, context, metadata, modifiedCoreFiles) {
   let cappedScore = score;
 
   if (isSecurityPlugin(context) && !hasCriticalSignalForSecPlugin(reasons)) {
@@ -292,8 +293,26 @@ function applyContextCaps(score, reasons, context, metadata) {
   }
 
   if (isTrustedPopularPlugin(context) && !hasRealRedFlag(reasons)) {
-    // WooCommerce, Elementor etc. accumulate boilerplate patterns — cap at MEDIUM
     cappedScore = Math.min(cappedScore, riskToMaxScore('medium'));
+  }
+
+  if (context.isWordPressCore) {
+    if (modifiedCoreFiles !== null && !modifiedCoreFiles.has(normalizePath(metadata.filePath))) {
+      // Checksums verified — file is unmodified official WP core, only surface real red flags
+      if (!hasRealRedFlag(reasons)) {
+        cappedScore = Math.min(cappedScore, riskToMaxScore('low'));
+      } else if (!hasCriticalSignal(reasons)) {
+        cappedScore = Math.min(cappedScore, riskToMaxScore('medium'));
+      }
+    } else if (modifiedCoreFiles === null) {
+      // WP-CLI not available — still cap core files tightly, mtime alone is not a signal
+      if (!hasRealRedFlag(reasons)) {
+        cappedScore = Math.min(cappedScore, riskToMaxScore('medium'));
+      } else if (!hasCriticalSignal(reasons)) {
+        cappedScore = Math.min(cappedScore, riskToMaxScore('high'));
+      }
+    }
+    // If modifiedCoreFiles has this file: checksum mismatch → full score, no cap
   }
 
   if (context.isKnownWordPressCode && !hasCriticalSignal(reasons)) {
@@ -342,7 +361,7 @@ function buildMessage(scan) {
   return `${scan.risk.toUpperCase()} Score ${scan.score}: ${scan.filePath} (${context}) - ${topReasons}`;
 }
 
-async function scanFile(filePath) {
+async function scanFile(filePath, modifiedCoreFiles) {
   const reasons = [];
   const context = classifyPath(filePath);
   const stat = await fs.promises.stat(filePath);
@@ -411,12 +430,7 @@ async function scanFile(filePath) {
     // unreadable file — skip silently
   }
 
-  if (context.isWordPressCore && reasons.length > 0) {
-    score += 20;
-    addReason(reasons, { label: 'Geänderte Datei im WordPress-Core-Pfad', risk: 'medium', score: 20 });
-  }
-
-  score = applyContextCaps(score, reasons, context, { ageHours });
+  score = applyContextCaps(score, reasons, context, { ageHours, filePath }, modifiedCoreFiles);
   const risk = scoreToRisk(score);
   return {
     filePath,
@@ -432,6 +446,54 @@ async function scanFile(filePath) {
     },
     message: reasons.length ? null : 'Keine verdächtigen Muster gefunden',
   };
+}
+
+async function findWpInstallations(vhostsPath) {
+  try {
+    const { stdout } = await execFileAsync('find', [
+      vhostsPath, '-name', 'wp-config.php', '-type', 'f',
+      '-not', '-path', '*/wp-content/*',
+    ], { timeout: 15000, maxBuffer: 2 * 1024 * 1024 });
+    return stdout.split('\n').filter(Boolean).map((p) => path.dirname(p));
+  } catch (err) {
+    if (err.stdout) return err.stdout.split('\n').filter(Boolean).map((p) => path.dirname(p));
+    return [];
+  }
+}
+
+async function runWpChecksums(wpPath) {
+  try {
+    const { stdout } = await execFileAsync('wp', [
+      'core', 'verify-checksums', '--allow-root', '--format=json',
+    ], { cwd: wpPath, timeout: 30000, maxBuffer: 4 * 1024 * 1024 });
+    const parsed = JSON.parse(stdout || '[]');
+    return parsed.map((entry) => normalizePath(path.join(wpPath, entry.file)));
+  } catch (err) {
+    // wp-cli not installed or returned non-JSON (e.g. "Success: …")
+    if (err.stdout) {
+      try {
+        const parsed = JSON.parse(err.stdout);
+        return parsed.map((entry) => normalizePath(path.join(wpPath, entry.file)));
+      } catch (_) {}
+    }
+    return null; // null = wp-cli unavailable or checksums passed with no output
+  }
+}
+
+async function collectModifiedCoreFiles(vhostsPath) {
+  if (!checkWpCli()) return null;
+  const installs = await findWpInstallations(vhostsPath);
+  if (installs.length === 0) return null;
+  const modified = new Set();
+  await Promise.all(installs.map(async (wpPath) => {
+    const files = await runWpChecksums(wpPath);
+    if (files) files.forEach((f) => modified.add(f));
+  }));
+  return modified;
+}
+
+function checkWpCli() {
+  try { execFileSync('which', ['wp'], { stdio: 'ignore' }); return true; } catch (_) { return false; }
 }
 
 function resolveVhostsPath(configPath) {
@@ -483,7 +545,12 @@ async function check(config) {
     result.metrics.scanned = files.length;
     if (excluded > 0) result.metrics.excluded = excluded;
 
-    const scans = await Promise.all(files.map(scanFile));
+    const modifiedCoreFiles = await collectModifiedCoreFiles(vhostsPath);
+    if (modifiedCoreFiles !== null) {
+      result.metrics.wpChecksumInstalls = modifiedCoreFiles.size > 0 ? `${modifiedCoreFiles.size} modified core file(s) detected` : 'all core checksums ok';
+    }
+
+    const scans = await Promise.all(files.map((f) => scanFile(f, modifiedCoreFiles)));
 
     for (const scan of scans) {
       if (scan.reasons.length === 0 || scan.risk === 'low') continue;
