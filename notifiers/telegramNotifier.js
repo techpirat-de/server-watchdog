@@ -110,11 +110,24 @@ function extractSecondaryFindings(checks, topAction) {
     }
   }
 
-  // 2. Suspicious files — skip pure noise, add note for likely plugin false-positives
+  // 2. Suspicious files — hash-changed trusted files first, then other real findings
   const sf = getCheck(checks, 'suspiciousFiles');
   if (sf) {
-    const realFindings  = sf.findings.filter((f) => (f.risk === 'high' || f.risk === 'critical') && !isNoiseFinding(f) && f.type !== 'core_checksum_ok');
-    const noiseFindings = sf.findings.filter((f) => isNoiseFinding(f));
+    // Hash-changed trusted files are highest priority — known file was tampered with
+    const hashChanged = sf.findings.filter((f) => f.hashChanged === true);
+    for (const f of hashChanged.slice(0, 2)) {
+      const short = f.file ? f.file.split('/').slice(-2).join('/') : f.message;
+      const desc = f.trustDescription ? ` (${f.trustDescription})` : '';
+      items.push(`Bekannte Datei verändert${desc}: ${short} — SHA256 stimmt nicht mehr überein.`);
+    }
+
+    const realFindings = sf.findings.filter(
+      (f) => (f.risk === 'high' || f.risk === 'critical')
+        && !isNoiseFinding(f)
+        && f.type !== 'core_checksum_ok'
+        && !f.hashChanged,
+    );
+    const noiseFindings = sf.findings.filter((f) => isNoiseFinding(f) && !f.trustedFile);
 
     for (const f of realFindings.slice(0, 2)) {
       const msg = f.file ? `${f.file.split('/').slice(-3).join('/')}` : f.message;
@@ -130,6 +143,13 @@ function extractSecondaryFindings(checks, topAction) {
       if (pluginNames.length) {
         items.push(`${pluginNames.join(', ')} enthält auffällige Muster (Remote URLs o.ä.) — vermutlich normaler Plugin-Code. Manuell prüfen.`);
       }
+    }
+
+    // Trusted files with verified hash — show as info only, not an alert
+    const trustedOk = sf.findings.filter((f) => f.trustedFile && f.hashVerified === true);
+    if (trustedOk.length > 0) {
+      const names = trustedOk.slice(0, 2).map((f) => f.file?.split('/').slice(-1)[0] || '').filter(Boolean);
+      items.push(`Bekannte Anwendung${trustedOk.length > 1 ? 'en' : ''} (Hash OK): ${names.join(', ')} — keine Aktion.`);
     }
 
     const coreOk = sf.findings.find((f) => f.type === 'core_checksum_ok');

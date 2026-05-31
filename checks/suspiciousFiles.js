@@ -8,6 +8,7 @@ const path = require('path');
 const readline = require('readline');
 
 const execFileAsync = promisify(execFile);
+const { load: loadTrustedFiles, checkTrust } = require('../lib/trustedFiles');
 
 const PHP_BINARY_CANDIDATES = [
   '/opt/plesk/php/8.3/bin/php',
@@ -342,7 +343,7 @@ function hasCriticalSignalForSecPlugin(reasons) {
   return reasons.some((r) => SECURITY_PLUGIN_ALLOWED_HIGH_CONFIDENCE.has(r.label));
 }
 
-function applyContextCaps(score, reasons, context, metadata, modifiedCoreFiles) {
+function applyContextCaps(score, reasons, context, metadata, modifiedCoreFiles, trust) {
   let cappedScore = score;
 
   if (isSecurityPlugin(context) && !hasCriticalSignalForSecPlugin(reasons)) {
@@ -386,6 +387,11 @@ function applyContextCaps(score, reasons, context, metadata, modifiedCoreFiles) 
     cappedScore = Math.min(cappedScore, riskToMaxScore('medium'));
   }
 
+  // Trusted + hash match: verified known-good file — suppress everything except real malware combos
+  if (trust?.hashMatch && !hasCriticalSignal(reasons)) {
+    cappedScore = Math.min(cappedScore, riskToMaxScore('low'));
+  }
+
   return cappedScore;
 }
 
@@ -419,13 +425,17 @@ function buildMessage(scan) {
   return `${scan.risk.toUpperCase()} Score ${scan.score}: ${scan.filePath} (${context}) - ${topReasons}`;
 }
 
-async function scanFile(filePath, modifiedCoreFiles) {
+async function scanFile(filePath, modifiedCoreFiles, trustedData) {
   const reasons = [];
   const context = classifyPath(filePath);
   const stat = await fs.promises.stat(filePath);
   const modifiedAt = stat.mtime.toISOString();
   const ageHours = Math.max(0, Math.round(((Date.now() - stat.mtime.getTime()) / 3_600_000) * 10) / 10);
   const sha256 = await hashFile(filePath);
+
+  // Trust check — must happen before scoring so hash-change can inject a HIGH reason
+  const trust = trustedData ? checkTrust(trustedData, filePath, sha256) : null;
+
   let score = 0;
   const scoredLabels = new Set();
   const addScoreOnce = (label, s) => { if (!scoredLabels.has(label)) { score += s; scoredLabels.add(label); } };
@@ -496,7 +506,15 @@ async function scanFile(filePath, modifiedCoreFiles) {
     // unreadable file — skip silently
   }
 
-  score = applyContextCaps(score, reasons, context, { ageHours, filePath }, modifiedCoreFiles);
+  // Trusted file with changed hash → HIGH alarm regardless of other patterns
+  if (trust && !trust.hashMatch) {
+    const label = 'Bekannte Datei verändert (Hash-Änderung)';
+    addReason(reasons, { label, risk: 'high', score: 80,
+      snippet: `Erwartet: ${trust.expectedHash.slice(0, 16)}… Aktuell: ${sha256.slice(0, 16)}…` });
+    addScoreOnce(label, 80);
+  }
+
+  score = applyContextCaps(score, reasons, context, { ageHours, filePath }, modifiedCoreFiles, trust);
   const risk = scoreToRisk(score);
   return {
     filePath,
@@ -510,6 +528,10 @@ async function scanFile(filePath, modifiedCoreFiles) {
       ageHours,
       sizeBytes: stat.size,
     },
+    trustedFile:   trust !== null,
+    hashVerified:  trust?.hashMatch ?? null,
+    hashChanged:   trust ? !trust.hashMatch : false,
+    trustDescription: trust?.description || null,
     message: reasons.length ? null : 'Keine verdächtigen Muster gefunden',
   };
 }
@@ -654,7 +676,11 @@ async function check(config) {
       result.metrics.wpChecksumInstalls = modifiedCoreFiles.size > 0 ? `${modifiedCoreFiles.size} modified core file(s) detected` : 'all core checksums ok';
     }
 
-    const scans = await Promise.all(files.map((f) => scanFile(f, modifiedCoreFiles)));
+    const trustedData = loadTrustedFiles();
+    const trustedCount = Object.keys(trustedData.trustedFiles || {}).length;
+    if (trustedCount > 0) result.metrics.trustedFilesConfigured = trustedCount;
+
+    const scans = await Promise.all(files.map((f) => scanFile(f, modifiedCoreFiles, trustedData)));
 
     let coreHeuristicSuppressed = 0;
     for (const scan of scans) {
@@ -688,6 +714,10 @@ async function check(config) {
         ageHours: scan.metadata.ageHours,
         sizeBytes: scan.metadata.sizeBytes,
         context: scan.context,
+        trustedFile:      scan.trustedFile,
+        hashVerified:     scan.hashVerified,
+        hashChanged:      scan.hashChanged,
+        trustDescription: scan.trustDescription,
         reasons: scan.reasons.map((r) => ({ label: r.label, risk: r.risk, score: r.score, line: r.line, snippet: r.snippet })),
         patterns: scan.reasons.map((r) => ({ label: r.label, risk: r.risk, line: r.line, snippet: r.snippet })),
       });
