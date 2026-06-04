@@ -81,6 +81,7 @@ function renderCheckCards(checks) {
 
   grid.innerHTML = checks.map((c) => {
     if (c.name === 'wordpressCheck') return renderWordPressCard(c);
+    if (c.name === 'suspiciousFiles') return renderSuspiciousFilesCard(c);
 
     const icon = STATUS_ICON[c.status] || '?';
     const iconColor = c.status === 'ok' ? 'var(--low)' : c.status === 'warning' ? 'var(--medium)' : 'var(--high)';
@@ -112,6 +113,67 @@ function renderCheckCards(checks) {
       header.querySelector('.wp-toggle').textContent = open ? '▶' : '▼';
     });
   });
+}
+
+function renderSuspiciousFilesCard(c) {
+  const icon = STATUS_ICON[c.status] || '?';
+  const iconColor = c.status === 'ok' ? 'var(--low)' : c.status === 'warning' ? 'var(--medium)' : 'var(--high)';
+  const m = c.metrics || {};
+
+  const findingsHtml = c.findings.length === 0
+    ? '<div class="check-findings" style="color:var(--low)">Keine Auffälligkeiten</div>'
+    : c.findings.slice(0, 6).map((f) => {
+        const color = FINDING_COLOR[f.risk] || 'var(--muted)';
+        const msg = escHtml(f.message || f.type || '');
+
+        if (f.hashChanged) {
+          const desc = escHtml(f.trustDescription || '');
+          const fp   = escHtml(f.file || '');
+          return `
+            <div class="check-finding-item trust-changed" data-filepath="${fp}">
+              <div class="finding-dot" style="background:var(--high)"></div>
+              <div style="flex:1">
+                <span>🔒 Bekannte Datei verändert${desc ? ` (${desc})` : ''}: <code>${escHtml((f.file||'').split('/').slice(-2).join('/'))}</code></span>
+                <div style="margin-top:6px;display:flex;gap:8px;align-items:center">
+                  <button class="btn-trust-approve" data-filepath="${fp}" data-desc="${desc}">
+                    ✔ Änderung bestätigen
+                  </button>
+                  <span class="trust-approve-result" style="font-size:0.8em;color:var(--muted)"></span>
+                </div>
+              </div>
+            </div>`;
+        }
+
+        if (f.trustedFile && f.hashVerified) {
+          return `
+            <div class="check-finding-item">
+              <div class="finding-dot" style="background:var(--low)"></div>
+              <span style="color:var(--low)">✔ Bekannt (Hash OK): <code>${escHtml((f.file||'').split('/').slice(-1)[0])}</code></span>
+            </div>`;
+        }
+
+        return `
+          <div class="check-finding-item">
+            <div class="finding-dot" style="background:${color}"></div>
+            <span>${msg}</span>
+          </div>`;
+      }).join('');
+
+  const metricsHtml = Object.entries(m).length
+    ? `<div class="sf-metrics">${
+        Object.entries(m).map(([k, v]) => `<span class="sf-metric">${escHtml(k)}: <b>${escHtml(String(v))}</b></span>`).join('')
+      }</div>`
+    : '';
+
+  return `<div class="check-card" id="sf-card">
+    <div class="check-name">
+      <span>Suspicious Files</span>
+      <span class="check-status-icon" style="color:${iconColor}" title="${c.status}">${icon}</span>
+    </div>
+    ${RISK_BADGE[c.risk] || ''}
+    ${metricsHtml}
+    <div style="margin-top:12px">${findingsHtml}</div>
+  </div>`;
 }
 
 function renderWordPressCard(c) {
@@ -296,6 +358,47 @@ function escHtml(str) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
 }
+
+// ── Trust approve button ──────────────────────────────────────────────────────
+
+document.getElementById('checks-grid').addEventListener('click', async (e) => {
+  const btn = e.target.closest('.btn-trust-approve');
+  if (!btn) return;
+
+  const filePath = btn.dataset.filepath;
+  const desc     = btn.dataset.desc || '';
+  const result   = btn.parentElement.querySelector('.trust-approve-result');
+
+  btn.disabled = true;
+  btn.textContent = '⏳ Speichere...';
+
+  try {
+    const res  = await fetch('/api/trust/approve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filePath, description: desc }),
+    });
+    const data = await res.json();
+
+    if (!res.ok) throw new Error(data.error || res.status);
+
+    btn.textContent = '✔ Bestätigt';
+    btn.style.background = 'var(--low)';
+    if (result) {
+      result.textContent = `SHA256: ${data.sha256.slice(0, 16)}…`;
+      result.style.color = 'var(--low)';
+    }
+    // Dim the whole finding row
+    btn.closest('.trust-changed')?.style.setProperty('opacity', '0.5');
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = '✔ Änderung bestätigen';
+    if (result) {
+      result.textContent = `Fehler: ${err.message}`;
+      result.style.color = 'var(--high)';
+    }
+  }
+});
 
 document.getElementById('modal-close').addEventListener('click', closeModal);
 document.getElementById('modal-overlay').addEventListener('click', (e) => {

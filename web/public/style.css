@@ -433,3 +433,44 @@ button:disabled { opacity: .4; cursor: default; }
   .checks-grid { grid-template-columns: 1fr; }
   main { padding: 20px 16px 48px; }
 }
+
+/* ── Trust / Approve button ── */
+.btn-trust-approve {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .2s, opacity .2s;
+  white-space: nowrap;
+}
+.btn-trust-approve:hover:not(:disabled) { background: #7381f5; }
+.btn-trust-approve:disabled { opacity: 0.6; cursor: default; }
+
+.trust-changed {
+  border-left: 3px solid var(--high);
+  padding-left: 8px;
+  border-radius: 0 4px 4px 0;
+  background: rgba(239,68,68,.06);
+  align-items: flex-start !important;
+  padding-top: 6px;
+  padding-bottom: 6px;
+  transition: opacity .4s;
+}
+
+.sf-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.sf-metric {
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--surface2);
+  border-radius: 4px;
+  padding: 2px 8px;
+}

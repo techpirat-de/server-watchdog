@@ -183,4 +183,65 @@ router.post('/test-notify', async (req, res) => {
   res.json({ results });
 });
 
+// ── Trust management ─────────────────────────────────────────────────────────
+
+router.get('/trust/list', (req, res) => {
+  try {
+    const { load } = require('../../lib/trustedFiles');
+    const data = load();
+    res.json(data.trustedFiles || {});
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/trust/approve', async (req, res) => {
+  const { filePath, description } = req.body;
+  if (!filePath) return res.status(400).json({ error: 'filePath required' });
+
+  const fs = require('fs');
+  const { load, save, hashFile } = require('../../lib/trustedFiles');
+
+  try {
+    fs.accessSync(filePath, fs.constants.R_OK);
+  } catch (_) {
+    return res.status(404).json({ error: `Datei nicht lesbar: ${filePath}` });
+  }
+
+  try {
+    const sha256 = await hashFile(filePath);
+    const data = load();
+    const existing = (data.trustedFiles || {})[filePath];
+    if (!data.trustedFiles) data.trustedFiles = {};
+    data.trustedFiles[filePath] = {
+      sha256,
+      description: description || existing?.description || '',
+      added:   existing?.added   || new Date().toISOString().slice(0, 10),
+      updated: new Date().toISOString().slice(0, 10),
+    };
+    save(data);
+    res.json({ ok: true, sha256, filePath });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/trust/remove', (req, res) => {
+  const { filePath } = req.body;
+  if (!filePath) return res.status(400).json({ error: 'filePath required' });
+
+  try {
+    const { load, save } = require('../../lib/trustedFiles');
+    const data = load();
+    if (!(data.trustedFiles || {})[filePath]) {
+      return res.status(404).json({ error: 'Nicht in Vertrauensliste' });
+    }
+    delete data.trustedFiles[filePath];
+    save(data);
+    res.json({ ok: true, filePath });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;
