@@ -127,15 +127,16 @@ function renderSuspiciousFilesCard(c) {
         const msg = escHtml(f.message || f.type || '');
 
         if (f.hashChanged) {
-          const desc = escHtml(f.trustDescription || '');
-          const fp   = escHtml(f.file || '');
+          const desc   = escHtml(f.trustDescription || '');
+          const fp     = escHtml(f.file || '');
+          const sha256 = escHtml(f.sha256 || '');
           return `
             <div class="check-finding-item trust-changed" data-filepath="${fp}">
               <div class="finding-dot" style="background:var(--high)"></div>
               <div style="flex:1">
                 <span>🔒 Bekannte Datei verändert${desc ? ` (${desc})` : ''}: <code>${escHtml((f.file||'').split('/').slice(-2).join('/'))}</code></span>
                 <div style="margin-top:6px;display:flex;gap:8px;align-items:center">
-                  <button class="btn-trust-approve" data-filepath="${fp}" data-desc="${desc}">
+                  <button class="btn-trust-approve" data-filepath="${fp}" data-sha256="${sha256}" data-desc="${desc}">
                     ✔ Änderung bestätigen
                   </button>
                   <span class="trust-approve-result" style="font-size:0.8em;color:var(--muted)"></span>
@@ -366,6 +367,7 @@ document.getElementById('checks-grid').addEventListener('click', async (e) => {
   if (!btn) return;
 
   const filePath = btn.dataset.filepath;
+  const sha256   = btn.dataset.sha256;
   const desc     = btn.dataset.desc || '';
   const result   = btn.parentElement.querySelector('.trust-approve-result');
 
@@ -376,7 +378,7 @@ document.getElementById('checks-grid').addEventListener('click', async (e) => {
     const res  = await fetch('/api/trust/approve', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ filePath, description: desc }),
+      body: JSON.stringify({ filePath, sha256, description: desc }),
     });
     const data = await res.json();
 

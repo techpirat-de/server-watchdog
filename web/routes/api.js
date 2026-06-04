@@ -196,20 +196,13 @@ router.get('/trust/list', (req, res) => {
 });
 
 router.post('/trust/approve', async (req, res) => {
-  const { filePath, description } = req.body;
+  const { filePath, sha256, description } = req.body;
   if (!filePath) return res.status(400).json({ error: 'filePath required' });
-
-  const fs = require('fs');
-  const { load, save, hashFile } = require('../../lib/trustedFiles');
-
-  try {
-    fs.accessSync(filePath, fs.constants.R_OK);
-  } catch (_) {
-    return res.status(404).json({ error: `Datei nicht lesbar: ${filePath}` });
-  }
+  if (!sha256)   return res.status(400).json({ error: 'sha256 required' });
+  if (!/^[a-f0-9]{64}$/i.test(sha256)) return res.status(400).json({ error: 'sha256 ungültig' });
 
   try {
-    const sha256 = await hashFile(filePath);
+    const { load, save } = require('../../lib/trustedFiles');
     const data = load();
     const existing = (data.trustedFiles || {})[filePath];
     if (!data.trustedFiles) data.trustedFiles = {};
