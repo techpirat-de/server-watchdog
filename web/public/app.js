@@ -153,6 +153,14 @@ function renderSuspiciousFilesCard(c) {
             </div>`;
         }
 
+        if (f.type === 'core_checksum_ok' || f.type === 'vendor_lib_suppressed') {
+          return `
+            <div class="check-finding-item">
+              <div class="finding-dot" style="background:var(--low)"></div>
+              <span style="color:var(--low)">ℹ ${msg}</span>
+            </div>`;
+        }
+
         return `
           <div class="check-finding-item">
             <div class="finding-dot" style="background:${color}"></div>

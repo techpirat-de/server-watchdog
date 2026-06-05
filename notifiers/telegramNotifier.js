@@ -125,6 +125,7 @@ function extractSecondaryFindings(checks, topAction) {
       (f) => (f.risk === 'high' || f.risk === 'critical')
         && !isNoiseFinding(f)
         && f.type !== 'core_checksum_ok'
+        && f.type !== 'vendor_lib_suppressed'
         && !f.hashChanged,
     );
     const noiseFindings = sf.findings.filter((f) => isNoiseFinding(f) && !f.trustedFile);
@@ -155,6 +156,11 @@ function extractSecondaryFindings(checks, topAction) {
     const coreOk = sf.findings.find((f) => f.type === 'core_checksum_ok');
     if (coreOk) {
       items.push(`Core-Checksums OK: ${coreOk.message}`);
+    }
+
+    const vendorOk = sf.findings.find((f) => f.type === 'vendor_lib_suppressed');
+    if (vendorOk) {
+      items.push(`Vendor-Libs ignoriert: ${vendorOk.message}`);
     }
   }
 

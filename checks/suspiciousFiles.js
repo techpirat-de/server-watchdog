@@ -42,6 +42,14 @@ const TRUSTED_POPULAR_PLUGINS = new Set([
   'creame-whatsapp-me', 'joinchat',
 ]);
 
+// HIGH_CONFIDENCE rules that still fire even in vendor libs of trusted plugins
+const VENDOR_SAFE_HIGH_CONFIDENCE = new Set([
+  'POST/GET-basierte Command Execution',
+  'eval(base64_decode(...))',
+  'assert($_POST/$_GET)',
+  'Crypto-Miner Hinweis',
+]);
+
 // Patterns that are always real red flags regardless of plugin
 const REAL_RED_FLAG_LABELS = new Set([
   'POST/GET-basierte Command Execution',
@@ -183,6 +191,10 @@ function classifyPath(filePath) {
       context.componentType = type;
       context.component = slug;
       context.isKnownWordPressCode = true;
+      // vendor/ = third-party library bundled in the plugin, not the plugin's own code
+      if (type === 'plugins' && parts[wpContentIndex + 3] === 'vendor') {
+        context.isVendorLibrary = true;
+      }
     } else if (type === 'languages') {
       context.area = 'wordpress-languages';
       context.componentType = 'languages';
@@ -245,7 +257,10 @@ function isLikelyInPhpString(line, pattern) {
 
 // Detects dangerous pattern combinations that are far more significant than individual scores.
 // Called after all individual rules have been collected.
-function detectDangerousCombinations(reasons) {
+function detectDangerousCombinations(reasons, context = null) {
+  // Vendor libraries (SSH, RSA, OAuth) legitimately combine exec + hex or base64 — skip combos
+  if (context && isVendorLibraryOfTrustedPlugin(context)) return [];
+
   const labels = new Set(reasons.map((r) => r.label));
   const combos = [];
 
@@ -297,12 +312,20 @@ function adjustRuleForContext(rule, context) {
     return { adjustedScore, adjustedRisk };
   }
 
+  // Vendor libraries (SSH, OAuth, RSA, HTTP clients) legitimately use exec, Hex, system —
+  // any contextual rule is noise here; only VENDOR_SAFE_HIGH_CONFIDENCE rules matter
+  if (isVendorLibraryOfTrustedPlugin(context)) {
+    adjustedScore = Math.min(adjustedScore, 5);
+    adjustedRisk = 'low';
+    return { adjustedScore, adjustedRisk };
+  }
+
   if (context.isKnownWordPressCode || context.isLowPriorityCache) {
     if (rule.command) {
       // shell_exec/system/exec in WP code is unusual → MEDIUM, not LOW
       adjustedScore = Math.min(adjustedScore, 35);
       adjustedRisk = 'medium';
-    } else if (rule.reducibleInWp || ['Remote URL im Code', 'WordPress HTTP API', 'curl_exec()', 'Variable Funktion', 'call_user_func()', 'Sehr lange Codezeile', 'Langer Base64-ähnlicher String', 'Variable Variablen'].includes(rule.label)) {
+    } else if (rule.reducibleInWp || ['Remote URL im Code', 'WordPress HTTP API', 'curl_exec()', 'Variable Funktion', 'call_user_func()', 'base64_decode()', 'Sehr lange Codezeile', 'Langer Base64-ähnlicher String', 'Variable Variablen'].includes(rule.label)) {
       adjustedScore = Math.min(adjustedScore, 5);
       adjustedRisk = 'low';
     }
@@ -324,6 +347,10 @@ function isTrustedPopularPlugin(context) {
   return context.isKnownWordPressCode
     && context.componentType === 'plugins'
     && TRUSTED_POPULAR_PLUGINS.has(context.component);
+}
+
+function isVendorLibraryOfTrustedPlugin(context) {
+  return Boolean(context.isVendorLibrary) && isTrustedPopularPlugin(context);
 }
 
 function hasRealRedFlag(reasons) {
@@ -348,6 +375,11 @@ function applyContextCaps(score, reasons, context, metadata, modifiedCoreFiles, 
 
   if (isSecurityPlugin(context) && !hasCriticalSignalForSecPlugin(reasons)) {
     cappedScore = Math.min(cappedScore, riskToMaxScore('low'));
+  }
+
+  if (isVendorLibraryOfTrustedPlugin(context) && !hasCriticalSignal(reasons)) {
+    // Belt-and-suspenders: even if individual rules leaked through, cap vendor libs at MEDIUM
+    cappedScore = Math.min(cappedScore, riskToMaxScore('medium'));
   }
 
   if (isTrustedPopularPlugin(context) && !hasRealRedFlag(reasons)) {
@@ -475,6 +507,10 @@ async function scanFile(filePath, modifiedCoreFiles, trustedData) {
           if (isSecurityPlugin(context) && !SECURITY_PLUGIN_ALLOWED_HIGH_CONFIDENCE.has(rule.label)) {
             s = Math.min(s, 5);
             r = 'low';
+          } else if (isVendorLibraryOfTrustedPlugin(context) && !VENDOR_SAFE_HIGH_CONFIDENCE.has(rule.label)) {
+            // php://input, file_put_contents, preg_replace /e etc. are expected in HTTP/crypto libs
+            s = Math.min(s, 5);
+            r = 'low';
           }
           addReason(reasons, { label: rule.label, risk: r, score: s, line: lineNum, snippet: line.slice(0, 160).trim() });
           addScoreOnce(rule.label, s);
@@ -498,7 +534,7 @@ async function scanFile(filePath, modifiedCoreFiles, trustedData) {
       addScoreOnce(reason.label, adjustedScore);
     }
 
-    for (const combo of detectDangerousCombinations(reasons)) {
+    for (const combo of detectDangerousCombinations(reasons, context)) {
       addReason(reasons, combo);
       addScoreOnce(combo.label, combo.score);
     }
@@ -683,6 +719,7 @@ async function check(config) {
     const scans = await Promise.all(files.map((f) => scanFile(f, modifiedCoreFiles, trustedData)));
 
     let coreHeuristicSuppressed = 0;
+    let vendorLibSuppressed = 0;
     for (const scan of scans) {
       if (scan.reasons.length === 0 || scan.risk === 'low') {
         // Count verified core files that had heuristic hits but were capped to LOW
@@ -693,6 +730,10 @@ async function check(config) {
           !modifiedCoreFiles.has(normalizePath(scan.filePath))
         ) {
           coreHeuristicSuppressed++;
+        }
+        // Count vendor lib files that had pattern hits but were reduced to LOW
+        if (scan.context.isVendorLibrary && isTrustedPopularPlugin(scan.context) && scan.reasons.length > 0) {
+          vendorLibSuppressed++;
         }
         continue;
       }
@@ -731,6 +772,15 @@ async function check(config) {
         type: 'core_checksum_ok',
         risk: 'low',
         message: `${coreHeuristicSuppressed} WordPress-Core-Heuristik-Treffer ignoriert (Checksums OK)`,
+      });
+    }
+
+    if (vendorLibSuppressed > 0) {
+      result.metrics.vendorLibsSuppressed = vendorLibSuppressed;
+      result.findings.push({
+        type: 'vendor_lib_suppressed',
+        risk: 'low',
+        message: `${vendorLibSuppressed} Vendor-Bibliotheks-Dateien in bekannten Plugins ignoriert (SSH, OAuth, HTTP-Client etc.)`,
       });
     }
 
