@@ -15,8 +15,6 @@ const RISK_RANK = { low: 0, medium: 1, high: 2, critical: 3 };
 const config = {
   SERVER_NAME:                   process.env.SERVER_NAME || os.hostname(),
   CHECK_INTERVAL_MINUTES:        parseInt(process.env.CHECK_INTERVAL_MINUTES, 10) || 60,
-  MAIL_QUEUE_WARNING_THRESHOLD:  parseInt(process.env.MAIL_QUEUE_WARNING_THRESHOLD, 10) || 20,
-  MAIL_QUEUE_CRITICAL_THRESHOLD: parseInt(process.env.MAIL_QUEUE_CRITICAL_THRESHOLD, 10) || 100,
   MAIL_LOG_PATH:                 process.env.MAIL_LOG_PATH || '/var/log/mail.log',
   VHOSTS_PATH:                   process.env.VHOSTS_PATH || '/var/www/vhosts',
   RECENT_FILE_HOURS:             parseInt(process.env.RECENT_FILE_HOURS, 10) || 24,
@@ -44,6 +42,13 @@ async function main() {
   const startTime = Date.now();
   console.log(`\n[monitor] ===== Plesk Server Watchdog starting at ${new Date().toISOString()} =====`);
   console.log(`[monitor] Host: ${config.SERVER_NAME}`);
+
+  try {
+    config.MAIL_QUEUE_HISTORY = await db.getMailQueueHistory({ limit: 12 });
+  } catch (err) {
+    config.MAIL_QUEUE_HISTORY = [];
+    console.error(`[monitor] Failed to load mail queue history: ${err.message}`);
+  }
 
   const checks = await Promise.all([
     runCheck('mailQueue', mailQueue.check, config),

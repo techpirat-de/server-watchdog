@@ -62,10 +62,6 @@ ALTER TABLE reports ADD COLUMN IF NOT EXISTS notifications_sent JSON DEFAULT NUL
 ```env
 SERVER_NAME=mein-server.example.com
 
-# Schwellenwerte Mail-Queue
-MAIL_QUEUE_WARNING_THRESHOLD=20
-MAIL_QUEUE_CRITICAL_THRESHOLD=100
-
 # Log-Auswertung: letzten X Minuten analysieren (sollte = Cronjob-Interval sein)
 CHECK_INTERVAL_MINUTES=60
 
@@ -189,6 +185,32 @@ Richtwerte:
 | CRITICAL | PHP in Upload/Media, `eval(base64_decode())`, POST/GET-Command Execution, Crypto-Miner |
 
 Wichtig: Ein Fund bedeutet „prüfen", nicht automatisch „löschen". Vor Löschungen immer Backup, Hash, Pfad und Plugin-Zuordnung prüfen.
+
+---
+
+## Mail-Queue-Bewertung
+
+Die Mail-Queue wird nicht mehr nur nach einer einzelnen Anzahl bewertet. Der Watchdog berücksichtigt:
+
+- aktuelle Queue-Größe
+- älteste und jüngste Mail in der Queue
+- Trend aus früheren Reports
+- Top-Absender
+- Top-Empfänger-Domains
+- häufigste Zustellfehler
+- Reputation-/Block-/Rate-Limit-Fehler
+
+Richtwerte:
+
+| Queue | Bewertung |
+|-------|-----------|
+| 0-20 | OK |
+| 20-50 | Hinweis, normalerweise kein Alarm |
+| 50-150 | Warnung |
+| >150 | Hoch |
+| >500 | Kritisch |
+
+Eine leicht erhöhte Queue führt nur dann zu einer höheren Bewertung, wenn sie wächst oder zusätzliche Fehler wie Bounces, Rate Limits oder Block-Meldungen auftreten.
 
 ---
 
