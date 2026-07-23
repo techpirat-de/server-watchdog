@@ -168,12 +168,24 @@ Der PHP-Datei-Scanner ist eine Heuristik und kein Malware-Beweis. Der Scanner be
 - **Security-Plugins** (Wordfence, Sucuri, iThemes, Shield, BulletProof, Cerber, AIOS): Alle Scores werden auf LOW gekappt. WAF-Code, eval, base64, `php://input` sind dort erwartetes Verhalten. Ausnahmen: POST/GET-Command-Execution und Crypto-Miner.
 - **Bekannte große Plugins** (WooCommerce, Elementor, Yoast, Jetpack, Contact Form 7 u.a.): Scores werden auf maximal MEDIUM gekappt, sofern kein echter Red-Flag-Befund vorliegt.
 - **Alle Plugin-/Theme-Dateien:** Ohne kritische Signale maximal HIGH. Ältere Dateien (> 30 Tage) werden weiter heruntergestuft.
+- **Konfigurierbare Trust-Listen:** `SUSPICIOUS_FILES_TRUSTED_PLUGINS` und `SUSPICIOUS_FILES_TRUSTED_FILES` senken schwache Heuristiken, ignorieren aber keine echten Red Flags wie `eval(base64_decode())`, POST/GET-Command-Execution, Upload-PHP oder Crypto-Miner.
+- **WordPress-Core:** Wenn WP-CLI verfügbar ist, werden offizielle Core-Checksummen geprüft. Bestätigte Core-Dateien werden nicht als Malware bewertet; nur veränderte Core-Dateien laufen durch die volle Analyse.
+- **Kritische Dateien:** `wp-config.php`, `wp-settings.php`, `wp-load.php`, `xmlrpc.php`, `index.php` und `.htaccess` werden gesondert markiert, sobald dort verdächtige Muster auftauchen.
+- **Massenmuster:** Identische SHA-256-Hashes, viele gleich große verdächtige Dateien und viele Änderungen innerhalb weniger Minuten erzeugen aggregierte Befunde statt 200 Einzelmeldungen.
+- **Quarantäne-Vorschläge:** Bei HIGH/CRITICAL zeigt der Report vorbereitete `cp`, `chmod 000` und `mv` Befehle. Der Watchdog führt diese Befehle nicht automatisch aus und löscht keine Dateien.
 
 **Ignorierte Pfade (Standard):**
 - `/wp-content/wflogs/` (Wordfence-Logs)
 - `/wp-content/uploads/cache/`
 
 Weitere Ausschlüsse können via `SUSPICIOUS_FILES_EXCLUDE` (kommagetrennte Pfadteile) konfiguriert werden.
+
+Zusätzliche Abwertung ohne harte Ignorierung:
+
+```env
+SUSPICIOUS_FILES_TRUSTED_PLUGINS=duplicator,gallery-plugin
+SUSPICIOUS_FILES_TRUSTED_FILES=/var/www/vhosts/example.com/httpdocs/wp-content/plugins/plugin-x/vendor/
+```
 
 Richtwerte:
 

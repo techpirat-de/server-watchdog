@@ -29,6 +29,8 @@ const TRUSTED_SECURITY_PLUGINS = new Set([
 ]);
 const SECURITY_PLUGIN_ALLOWED_HIGH_CONFIDENCE = new Set([
   'POST/GET-basierte Command Execution',
+  'Upload-Datei wird per include/require geladen',
+  'compress.zlib Stream Wrapper',
   'Crypto-Miner Hinweis',
 ]);
 
@@ -53,6 +55,8 @@ const VENDOR_SAFE_HIGH_CONFIDENCE = new Set([
 // Patterns that are always real red flags regardless of plugin
 const REAL_RED_FLAG_LABELS = new Set([
   'POST/GET-basierte Command Execution',
+  'Upload-Datei wird per include/require geladen',
+  'compress.zlib Stream Wrapper',
   'Crypto-Miner Hinweis',
   'eval(base64_decode(...))',
   'assert($_POST/$_GET)',
@@ -86,6 +90,18 @@ const LOW_PRIORITY_CACHE_PARTS = [
   'wp-content/cache',
   'wp-content/uploads/cache',
 ];
+const CRITICAL_FILE_BASENAMES = new Set([
+  'wp-config.php',
+  'wp-settings.php',
+  'wp-load.php',
+  'xmlrpc.php',
+  '.htaccess',
+]);
+const SUSPICIOUS_WEBROOT_NAMES = new Set([
+  'about', 'atom', 'chosen', 'class', 'content', 'default', 'inputs',
+  'license', 'moon', 'network', 'options', 'radio', 'simple', 'style',
+  'system', 'update',
+]);
 
 const HIGH_CONFIDENCE_RULES = [
   { label: 'POST/GET-basierte Command Execution', score: 100, risk: 'critical', pattern: /\b(?:system|shell_exec|exec|passthru|proc_open|popen)\s*\(\s*\$_(?:POST|GET|REQUEST|COOKIE)\s*\[/i },
@@ -97,6 +113,8 @@ const HIGH_CONFIDENCE_RULES = [
   { label: 'preg_replace /e Modifier', score: 85, risk: 'high', pattern: /preg_replace\s*\([^;]+\/e['"]/i },
   { label: 'create_function()', score: 70, risk: 'high', pattern: /create_function\s*\(/i },
   { label: 'Remote Download mit Ausführungshinweis', score: 70, risk: 'high', pattern: /(?:curl_exec|file_get_contents|fopen)\s*\([^;]+https?:\/\/[\s\S]{0,300}\b(?:eval|include|require|file_put_contents|shell_exec|system|exec)\s*\(/i },
+  { label: 'Upload-Datei wird per include/require geladen', score: 95, risk: 'critical', pattern: /\b(?:include|include_once|require|require_once)\s*\(?\s*[^;]*(?:wp-content\/uploads|\/uploads\/)[^;]*\.php/i },
+  { label: 'compress.zlib Stream Wrapper', score: 90, risk: 'high', pattern: /compress\.zlib:\/\//i },
   { label: 'Versteckte iframe/script Injection', score: 70, risk: 'high', pattern: /<iframe[^>]+style\s*=\s*["'][^"']*(?:display\s*:\s*none|visibility\s*:\s*hidden)|<script[^>]+src\s*=\s*["']https?:\/\/[^"']+/i },
   { label: 'Crypto-Miner Hinweis', score: 100, risk: 'critical', pattern: /\b(?:xmrig|monero|cryptonight|stratum\+tcp|xmr-stak)\b/i },
 ];
@@ -126,19 +144,43 @@ function buildExcludeList() {
   ];
 }
 
+function parseCsvEnv(name) {
+  return (process.env[name] || '').split(',').map((s) => s.trim()).filter(Boolean);
+}
+
+function getTrustedPluginSlugs() {
+  return new Set([
+    ...TRUSTED_POPULAR_PLUGINS,
+    ...parseCsvEnv('SUSPICIOUS_FILES_TRUSTED_PLUGINS').map((s) => s.toLowerCase()),
+  ]);
+}
+
+function getTrustedFileFragments() {
+  return parseCsvEnv('SUSPICIOUS_FILES_TRUSTED_FILES').map(normalizePath);
+}
+
 function isExcluded(filePath, excludeList) {
   const normalized = normalizePath(filePath);
   return excludeList.some((pattern) => normalized.includes(normalizePath(pattern)));
 }
 
-async function findRecentPhpFiles(vhostsPath, hours) {
+function isConfiguredTrustedFile(filePath) {
+  const normalized = normalizePath(filePath);
+  return getTrustedFileFragments().some((fragment) => normalized.includes(fragment));
+}
+
+async function findRecentScanFiles(vhostsPath, hours) {
   try {
     const { stdout } = await execFileAsync('find', [
       vhostsPath,
+      '(',
       '-name', '*.php',
+      '-o', '-name', '*.phtml',
+      '-o', '-name', '.htaccess',
+      ')',
       '-mmin', `-${hours * 60}`,
       '-type', 'f',
-      '-not', '-path', '*/\.*',
+      '-not', '-path', '*/.*/*',
     ], { timeout: 30000, maxBuffer: 10 * 1024 * 1024 });
 
     return stdout.split('\n').filter(Boolean);
@@ -176,7 +218,13 @@ function classifyPath(filePath) {
     isLowPriorityCache: isLowPriorityCachePath(filePath),
     isKnownWordPressCode: false,
     isSystemTemp: filePath.startsWith('/tmp/') || filePath.startsWith('/var/tmp/') || filePath.startsWith('/dev/shm/'),
+    criticalFile: null,
   };
+
+  const baseName = path.basename(filePath).toLowerCase();
+  if (CRITICAL_FILE_BASENAMES.has(baseName) || baseName === 'index.php') {
+    context.criticalFile = baseName;
+  }
 
   if (parts.includes('wp-admin') || parts.includes('wp-includes') || /^wp-[^/]+\.php$/i.test(path.basename(filePath))) {
     context.area = 'wordpress-core';
@@ -346,7 +394,7 @@ function isSecurityPlugin(context) {
 function isTrustedPopularPlugin(context) {
   return context.isKnownWordPressCode
     && context.componentType === 'plugins'
-    && TRUSTED_POPULAR_PLUGINS.has(context.component);
+    && getTrustedPluginSlugs().has(String(context.component || '').toLowerCase());
 }
 
 function isVendorLibraryOfTrustedPlugin(context) {
@@ -358,7 +406,7 @@ function hasRealRedFlag(reasons) {
 }
 
 function hasCriticalSignal(reasons) {
-  return reasons.some((reason) => reason.risk === 'critical' || [
+  return reasons.some((reason) => reason.risk === 'critical' || REAL_RED_FLAG_LABELS.has(reason.label) || [
     'POST/GET-basierte Command Execution',
     'eval(base64_decode(...))',
     'assert($_POST/$_GET)',
@@ -419,6 +467,10 @@ function applyContextCaps(score, reasons, context, metadata, modifiedCoreFiles, 
     cappedScore = Math.min(cappedScore, riskToMaxScore('medium'));
   }
 
+  if (metadata.configTrustedFile && !hasCriticalSignal(reasons)) {
+    cappedScore = Math.min(cappedScore, riskToMaxScore('medium'));
+  }
+
   // Trusted + hash match: verified known-good file — suppress everything except real malware combos
   if (trust?.hashMatch && !hasCriticalSignal(reasons)) {
     cappedScore = Math.min(cappedScore, riskToMaxScore('low'));
@@ -457,6 +509,110 @@ function buildMessage(scan) {
   return `${scan.risk.toUpperCase()} Score ${scan.score}: ${scan.filePath} (${context}) - ${topReasons}`;
 }
 
+function shellQuote(value) {
+  return `'${String(value).replace(/'/g, "'\\''")}'`;
+}
+
+function buildQuarantinePlan(filePath) {
+  const quarantineDir = '/root/server-watchdog-quarantine';
+  const target = `${quarantineDir}${filePath}`;
+  return {
+    note: 'Nur Vorschlag: vorher Backup/Plugin-Kontext prüfen. Der Watchdog führt diese Befehle nicht automatisch aus.',
+    commands: [
+      `install -d ${shellQuote(path.dirname(target))}`,
+      `cp -a -- ${shellQuote(filePath)} ${shellQuote(target)}.bak`,
+      `chmod 000 -- ${shellQuote(filePath)}`,
+      `mv -- ${shellQuote(filePath)} ${shellQuote(target)}`,
+    ],
+  };
+}
+
+function buildAggregateFindings(scans) {
+  const findings = [];
+  const relevant = scans.filter((scan) => (
+    scan.reasons.length > 0
+    && (
+      scan.risk !== 'low'
+      || scan.context.isUploadLike
+      || scan.context.isTempLike
+      || !scan.context.isKnownWordPressCode
+    )
+  ));
+
+  const byHash = new Map();
+  const bySize = new Map();
+  for (const scan of relevant) {
+    if (!scan.metadata.sha256) continue;
+    if (!byHash.has(scan.metadata.sha256)) byHash.set(scan.metadata.sha256, []);
+    byHash.get(scan.metadata.sha256).push(scan);
+
+    const sizeKey = String(scan.metadata.sizeBytes);
+    if (!bySize.has(sizeKey)) bySize.set(sizeKey, []);
+    bySize.get(sizeKey).push(scan);
+  }
+
+  const repeatedHashes = [...byHash.entries()]
+    .filter(([, group]) => group.length >= 3)
+    .sort((a, b) => b[1].length - a[1].length);
+  for (const [sha256, group] of repeatedHashes.slice(0, 5)) {
+    findings.push({
+      type: 'mass_infection_hash',
+      risk: 'critical',
+      count: group.length,
+      sha256,
+      files: group.slice(0, 10).map((scan) => scan.filePath),
+      message: `${group.length} verdächtige Dateien haben identischen SHA-256-Hash (${sha256.slice(0, 16)}...). Das kann auf eine verteilte Webshell/Masseninfektion hinweisen.`,
+    });
+  }
+
+  const repeatedSizes = [...bySize.entries()]
+    .filter(([, group]) => group.length >= 20)
+    .sort((a, b) => b[1].length - a[1].length);
+  for (const [sizeBytes, group] of repeatedSizes.slice(0, 5)) {
+    findings.push({
+      type: 'mass_infection_size',
+      risk: 'high',
+      count: group.length,
+      sizeBytes: Number(sizeBytes),
+      files: group.slice(0, 10).map((scan) => scan.filePath),
+      message: `${group.length} verdächtige Dateien haben exakt ${sizeBytes} Byte. Bitte auf kopierte Malware-Dropper prüfen.`,
+    });
+  }
+
+  const sorted = relevant
+    .map((scan) => ({ scan, ts: new Date(scan.metadata.modifiedAt).getTime() }))
+    .filter((entry) => Number.isFinite(entry.ts))
+    .sort((a, b) => a.ts - b.ts);
+  let bestWindow = [];
+  for (let left = 0, right = 0; left < sorted.length; left++) {
+    while (right < sorted.length && sorted[right].ts - sorted[left].ts <= 10 * 60 * 1000) right++;
+    const window = sorted.slice(left, right);
+    if (window.length > bestWindow.length) bestWindow = window;
+  }
+  if (bestWindow.length >= 20) {
+    findings.push({
+      type: 'mass_modification_burst',
+      risk: 'high',
+      count: bestWindow.length,
+      firstModifiedAt: new Date(bestWindow[0].ts).toISOString(),
+      lastModifiedAt: new Date(bestWindow[bestWindow.length - 1].ts).toISOString(),
+      files: bestWindow.slice(0, 10).map((entry) => entry.scan.filePath),
+      message: `${bestWindow.length} verdächtige Dateien wurden innerhalb von 10 Minuten geändert. Das spricht für automatisierte Veränderung oder Plugin-Massenupdate; bei unbekannten Pfaden sofort prüfen.`,
+    });
+  }
+
+  const sizeGroups = [...bySize.entries()]
+    .sort((a, b) => b[1].length - a[1].length)
+    .slice(0, 10)
+    .map(([sizeBytes, group]) => ({
+      sizeBytes: Number(sizeBytes),
+      count: group.length,
+      examples: group.slice(0, 5).map((scan) => scan.filePath),
+    }));
+
+  return { findings, sizeGroups };
+}
+
 async function scanFile(filePath, modifiedCoreFiles, trustedData) {
   const reasons = [];
   const context = classifyPath(filePath);
@@ -464,6 +620,7 @@ async function scanFile(filePath, modifiedCoreFiles, trustedData) {
   const modifiedAt = stat.mtime.toISOString();
   const ageHours = Math.max(0, Math.round(((Date.now() - stat.mtime.getTime()) / 3_600_000) * 10) / 10);
   const sha256 = await hashFile(filePath);
+  const configTrustedFile = isConfiguredTrustedFile(filePath);
 
   // Trust check — must happen before scoring so hash-change can inject a HIGH reason
   const trust = trustedData ? checkTrust(trustedData, filePath, sha256) : null;
@@ -489,6 +646,16 @@ async function scanFile(filePath, modifiedCoreFiles, trustedData) {
   if (isLikelyRandomPhpName(filePath) && !context.isLowPriorityCache) {
     addReason(reasons, { label: 'Zufällig wirkender PHP-Dateiname', risk: 'medium', score: 35 });
     score += 35;
+  }
+
+  const baseName = path.basename(filePath, path.extname(filePath)).toLowerCase();
+  if (
+    SUSPICIOUS_WEBROOT_NAMES.has(baseName)
+    && !context.isKnownWordPressCode
+    && !context.isLowPriorityCache
+  ) {
+    addReason(reasons, { label: 'Verdächtiger generischer Dateiname im Webroot-Kontext', risk: 'medium', score: 30 });
+    score += 30;
   }
 
   try {
@@ -542,6 +709,12 @@ async function scanFile(filePath, modifiedCoreFiles, trustedData) {
     // unreadable file — skip silently
   }
 
+  if (context.criticalFile && reasons.length > 0 && !context.isLowPriorityCache) {
+    const label = 'Kritische WordPress-/Webserver-Datei mit verdächtigem Muster';
+    addReason(reasons, { label, risk: 'high', score: 45, snippet: context.criticalFile });
+    addScoreOnce(label, 45);
+  }
+
   // Trusted file with changed hash → HIGH alarm regardless of other patterns
   if (trust && !trust.hashMatch) {
     const label = 'Bekannte Datei verändert (Hash-Änderung)';
@@ -550,7 +723,7 @@ async function scanFile(filePath, modifiedCoreFiles, trustedData) {
     addScoreOnce(label, 80);
   }
 
-  score = applyContextCaps(score, reasons, context, { ageHours, filePath }, modifiedCoreFiles, trust);
+  score = applyContextCaps(score, reasons, context, { ageHours, filePath, configTrustedFile }, modifiedCoreFiles, trust);
   const risk = scoreToRisk(score);
   return {
     filePath,
@@ -565,6 +738,7 @@ async function scanFile(filePath, modifiedCoreFiles, trustedData) {
       sizeBytes: stat.size,
     },
     trustedFile:   trust !== null,
+    configTrustedFile,
     hashVerified:  trust?.hashMatch ?? null,
     hashChanged:   trust ? !trust.hashMatch : false,
     trustDescription: trust?.description || null,
@@ -698,7 +872,7 @@ async function check(config) {
 
   try {
     const excludeList = buildExcludeList();
-    const allFiles = await findRecentPhpFiles(vhostsPath, config.RECENT_FILE_HOURS);
+    const allFiles = await findRecentScanFiles(vhostsPath, config.RECENT_FILE_HOURS);
     const files = excludeList.length
       ? allFiles.filter((f) => !isExcluded(f, excludeList))
       : allFiles;
@@ -715,11 +889,18 @@ async function check(config) {
     const trustedData = loadTrustedFiles();
     const trustedCount = Object.keys(trustedData.trustedFiles || {}).length;
     if (trustedCount > 0) result.metrics.trustedFilesConfigured = trustedCount;
+    const trustedPluginCount = parseCsvEnv('SUSPICIOUS_FILES_TRUSTED_PLUGINS').length;
+    const trustedFileCount = parseCsvEnv('SUSPICIOUS_FILES_TRUSTED_FILES').length;
+    if (trustedPluginCount > 0) result.metrics.configTrustedPlugins = trustedPluginCount;
+    if (trustedFileCount > 0) result.metrics.configTrustedFiles = trustedFileCount;
 
     const scans = await Promise.all(files.map((f) => scanFile(f, modifiedCoreFiles, trustedData)));
+    const aggregates = buildAggregateFindings(scans);
+    if (aggregates.sizeGroups.length > 0) result.metrics.sizeGroups = aggregates.sizeGroups;
 
     let coreHeuristicSuppressed = 0;
     let vendorLibSuppressed = 0;
+    let configTrustedSuppressed = 0;
     for (const scan of scans) {
       if (scan.reasons.length === 0 || scan.risk === 'low') {
         // Count verified core files that had heuristic hits but were capped to LOW
@@ -735,6 +916,9 @@ async function check(config) {
         if (scan.context.isVendorLibrary && isTrustedPopularPlugin(scan.context) && scan.reasons.length > 0) {
           vendorLibSuppressed++;
         }
+        if (scan.configTrustedFile && scan.reasons.length > 0) {
+          configTrustedSuppressed++;
+        }
         continue;
       }
       result.metrics.flagged++;
@@ -744,7 +928,7 @@ async function check(config) {
       else if (risk === 'high') result.metrics.high++;
       else if (risk === 'medium') result.metrics.medium++;
 
-      result.findings.push({
+      const finding = {
         type: 'suspicious_file',
         file: scan.filePath,
         message: buildMessage(scan),
@@ -756,14 +940,28 @@ async function check(config) {
         sizeBytes: scan.metadata.sizeBytes,
         context: scan.context,
         trustedFile:      scan.trustedFile,
+        configTrustedFile: scan.configTrustedFile,
         hashVerified:     scan.hashVerified,
         hashChanged:      scan.hashChanged,
         trustDescription: scan.trustDescription,
         reasons: scan.reasons.map((r) => ({ label: r.label, risk: r.risk, score: r.score, line: r.line, snippet: r.snippet })),
         patterns: scan.reasons.map((r) => ({ label: r.label, risk: r.risk, line: r.line, snippet: r.snippet })),
-      });
+      };
+      if (scan.risk === 'high' || scan.risk === 'critical') {
+        finding.quarantine = buildQuarantinePlan(scan.filePath);
+      }
+      result.findings.push(finding);
 
       if (RISK_RANK[risk] > RISK_RANK[result.risk]) result.risk = risk;
+    }
+
+    for (const aggregate of aggregates.findings) {
+      result.findings.push(aggregate);
+      result.metrics.flagged++;
+      if (RISK_RANK[aggregate.risk] > RISK_RANK[result.risk]) result.risk = aggregate.risk;
+      if (aggregate.risk === 'critical') result.metrics.critical++;
+      else if (aggregate.risk === 'high') result.metrics.high++;
+      else if (aggregate.risk === 'medium') result.metrics.medium++;
     }
 
     if (coreHeuristicSuppressed > 0) {
@@ -781,6 +979,15 @@ async function check(config) {
         type: 'vendor_lib_suppressed',
         risk: 'low',
         message: `${vendorLibSuppressed} Vendor-Bibliotheks-Dateien in bekannten Plugins ignoriert (SSH, OAuth, HTTP-Client etc.)`,
+      });
+    }
+
+    if (configTrustedSuppressed > 0) {
+      result.metrics.configTrustedHeuristicsSuppressed = configTrustedSuppressed;
+      result.findings.push({
+        type: 'configured_trust_suppressed',
+        risk: 'low',
+        message: `${configTrustedSuppressed} Heuristik-Treffer durch konfigurierte Trust-Liste abgewertet. Kritische Malware-Kombinationen bleiben davon ausgenommen.`,
       });
     }
 
