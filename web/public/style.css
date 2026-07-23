@@ -69,6 +69,7 @@ main {
 .section-title { font-size: 16px; font-weight: 600; margin-bottom: 16px; color: var(--text); }
 .section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
 .section-header .section-title { margin-bottom: 0; }
+.section-hint { color: var(--muted); font-size: 12px; }
 
 /* ── Stats grid ── */
 .stats-grid {
@@ -143,6 +144,35 @@ main {
 .ai-field-value { font-size: 14px; }
 .ai-actions { list-style: none; }
 .ai-actions li::before { content: '→ '; color: var(--accent); }
+
+/* ── Incident card ── */
+.incident-card {
+  background: var(--surface);
+  border: 1px solid var(--critical);
+  border-radius: 10px;
+  padding: 20px;
+}
+.incident-main {
+  display: grid;
+  grid-template-columns: minmax(220px, 2fr) repeat(3, minmax(90px, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+.incident-path {
+  font-family: monospace;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+  color: var(--text);
+}
+.incident-summary {
+  margin-top: 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.incident-error {
+  color: var(--high);
+  font-weight: 600;
+}
 
 /* ── Badges ── */
 .badge {
@@ -339,6 +369,69 @@ button:disabled { opacity: .4; cursor: default; }
 .notify-result.error   { display: inline-block; background: #7f1d1d44; color: var(--high); border: 1px solid #991b1b; }
 .notify-result.info    { display: inline-block; background: #1e3a5f44; color: #60a5fa; border: 1px solid #1e40af; }
 
+/* ── URL monitoring ── */
+.url-monitor {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px 20px;
+}
+.url-form {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(260px, 2fr) 110px auto;
+  gap: 10px;
+  align-items: center;
+}
+.url-form input {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 9px 11px;
+  font-size: 13px;
+  min-width: 0;
+}
+.url-list {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.url-row {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr) 54px auto;
+  align-items: center;
+  gap: 12px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.url-enabled {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.url-main { min-width: 0; }
+.url-label { font-weight: 600; font-size: 13px; overflow-wrap: anywhere; }
+.url-value, .url-card-meta {
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.url-timeout {
+  color: var(--muted);
+  font-size: 12px;
+  text-align: right;
+}
+.url-empty {
+  color: var(--muted);
+  font-size: 13px;
+  padding: 12px 0 2px;
+}
+
 /* ── WordPress check card ── */
 .check-card--wide {
   grid-column: 1 / -1;
@@ -432,6 +525,11 @@ button:disabled { opacity: .4; cursor: default; }
   .ai-card { grid-template-columns: 1fr; }
   .checks-grid { grid-template-columns: 1fr; }
   main { padding: 20px 16px 48px; }
+  .section-header { align-items: flex-start; flex-direction: column; gap: 4px; }
+  .url-form { grid-template-columns: 1fr; }
+  .url-row { grid-template-columns: 1fr; align-items: flex-start; }
+  .url-timeout { text-align: left; }
+  .incident-main { grid-template-columns: 1fr; }
 }
 
 /* ── Trust / Approve button ── */

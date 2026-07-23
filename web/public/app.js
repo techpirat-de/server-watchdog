@@ -56,6 +56,19 @@ async function api(path) {
   return res.json();
 }
 
+async function apiJson(path, options = {}) {
+  const res = await fetch(`/api${path}`, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(options.headers || {}),
+    },
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `API ${path}: ${res.status}`);
+  return data;
+}
+
 // ── Stats + Latest ────────────────────────────────────────────────────────────
 
 async function loadDashboard() {
@@ -72,6 +85,7 @@ async function loadDashboard() {
     document.getElementById('stat-risk').innerHTML = RISK_BADGE[latest.overall_risk] || latest.overall_risk;
     renderCheckCards(latest.checks);
     renderAiReview(latest.ai_review);
+    renderIncident(latest.incident);
   }
 }
 
@@ -82,6 +96,7 @@ function renderCheckCards(checks) {
   grid.innerHTML = checks.map((c) => {
     if (c.name === 'wordpressCheck') return renderWordPressCard(c);
     if (c.name === 'suspiciousFiles') return renderSuspiciousFilesCard(c);
+    if (c.name === 'urlHealth') return renderUrlHealthCard(c);
 
     const icon = STATUS_ICON[c.status] || '?';
     const iconColor = c.status === 'ok' ? 'var(--low)' : c.status === 'warning' ? 'var(--medium)' : 'var(--high)';
@@ -113,6 +128,32 @@ function renderCheckCards(checks) {
       header.querySelector('.wp-toggle').textContent = open ? '▶' : '▼';
     });
   });
+}
+
+function renderUrlHealthCard(c) {
+  const icon = STATUS_ICON[c.status] || '?';
+  const iconColor = c.status === 'ok' ? 'var(--low)' : c.status === 'warning' ? 'var(--medium)' : 'var(--high)';
+  const targets = c.metrics?.targets || [];
+  const rows = targets.length === 0
+    ? '<div class="check-findings" style="color:var(--muted)">Keine URLs konfiguriert</div>'
+    : targets.slice(0, 8).map((t) => `
+      <div class="check-finding-item">
+        <div class="finding-dot" style="background:${t.ok ? 'var(--low)' : (FINDING_COLOR[t.risk] || 'var(--high)')}"></div>
+        <div>
+          <div>${escHtml(t.label || t.url)}</div>
+          <div class="url-card-meta">${escHtml(t.url)} · ${t.statusCode || t.error || 'Fehler'} · ${t.responseTimeMs ?? '–'} ms</div>
+        </div>
+      </div>`).join('');
+
+  return `<div class="check-card">
+    <div class="check-name">
+      <span>URL-Erreichbarkeit</span>
+      <span class="check-status-icon" style="color:${iconColor}" title="${c.status}">${icon}</span>
+    </div>
+    ${RISK_BADGE[c.risk] || ''}
+    <div class="wp-summary">${c.metrics?.healthy ?? 0}/${c.metrics?.checked ?? 0} erreichbar</div>
+    <div style="margin-top:12px">${rows}</div>
+  </div>`;
 }
 
 function renderSuspiciousFilesCard(c) {
@@ -263,6 +304,43 @@ function renderAiReview(ai) {
     </div>`;
 }
 
+function renderIncident(incident) {
+  const section = document.getElementById('incident-section');
+  const card = document.getElementById('incident-card');
+  if (!incident) {
+    section.style.display = 'none';
+    return;
+  }
+
+  section.style.display = '';
+  if (incident.status === 'error') {
+    card.innerHTML = `<div class="incident-error">Incident Mode fehlgeschlagen: ${escHtml(incident.message || 'unbekannter Fehler')}</div>`;
+    return;
+  }
+
+  const summary = incident.summary || {};
+  card.innerHTML = `
+    <div class="incident-main">
+      <div>
+        <div class="ai-field-label">Evidence-Ordner</div>
+        <div class="incident-path">${escHtml(incident.incidentDir || '–')}</div>
+      </div>
+      <div>
+        <div class="ai-field-label">Trigger</div>
+        <div class="ai-field-value">${escHtml(incident.triggerCount ?? '–')}</div>
+      </div>
+      <div>
+        <div class="ai-field-label">Verdächtige Dateien</div>
+        <div class="ai-field-value">${escHtml(incident.suspiciousFiles ?? summary.suspiciousFiles ?? '–')}</div>
+      </div>
+      <div>
+        <div class="ai-field-label">Kampagnen</div>
+        <div class="ai-field-value">${escHtml(incident.campaigns ?? '–')}</div>
+      </div>
+    </div>
+    <div class="incident-summary">${escHtml(summary.status || 'Read-only Forensikbericht wurde erzeugt.')}</div>`;
+}
+
 // ── History Table ─────────────────────────────────────────────────────────────
 
 async function loadHistory() {
@@ -315,7 +393,7 @@ async function openModal(id) {
     const r = await api(`/reports/${id}`);
     title.innerHTML = `Report ${fmtDate(r.timestamp)} &nbsp; ${RISK_BADGE[r.overall_risk] || r.overall_risk}`;
 
-    const checksHtml = (r.checks || []).map((c) => {
+      const checksHtml = (r.checks || []).map((c) => {
       const findingsHtml = c.findings.length === 0
         ? '<div class="modal-finding" style="color:var(--low)">Keine Findings</div>'
         : c.findings.map((f) => `<div class="modal-finding">
@@ -348,7 +426,18 @@ async function openModal(id) {
       </div>`;
     }
 
-    body.innerHTML = checksHtml + aiHtml;
+    let incidentHtml = '';
+    if (r.incident) {
+      incidentHtml = `<div class="modal-check-block">
+        <div class="modal-check-title"><span>Incident Mode</span>${r.incident.status === 'error' ? RISK_BADGE.high : RISK_BADGE.critical}</div>
+        <div class="modal-finding"><strong>Evidence-Ordner:</strong> <code>${escHtml(r.incident.incidentDir || '–')}</code></div>
+        <div class="modal-finding"><strong>Trigger:</strong> ${escHtml(r.incident.triggerCount ?? '–')}</div>
+        <div class="modal-finding"><strong>Verdächtige Dateien:</strong> ${escHtml(r.incident.suspiciousFiles ?? '–')}</div>
+        <div class="modal-finding"><strong>Status:</strong> ${escHtml(r.incident.summary?.status || r.incident.message || '–')}</div>
+      </div>`;
+    }
+
+    body.innerHTML = checksHtml + aiHtml + incidentHtml;
   } catch (err) {
     body.innerHTML = `<div class="loading-row" style="color:var(--high)">${escHtml(err.message)}</div>`;
   }
@@ -464,6 +553,115 @@ async function loadCronStatus() {
 }
 
 document.getElementById('btn-refresh-status').addEventListener('click', loadCronStatus);
+
+// ── URL monitoring settings ──────────────────────────────────────────────────
+
+async function loadMonitoredUrls() {
+  const list = document.getElementById('url-list');
+  try {
+    const urls = await api('/monitored-urls');
+    if (!urls.length) {
+      list.innerHTML = '<div class="url-empty">Noch keine URLs eingetragen.</div>';
+      return;
+    }
+
+    list.innerHTML = urls.map((item) => `
+      <div class="url-row" data-id="${item.id}">
+        <label class="url-enabled">
+          <input type="checkbox" class="url-toggle" ${item.enabled ? 'checked' : ''}>
+          <span>${item.enabled ? 'aktiv' : 'pausiert'}</span>
+        </label>
+        <div class="url-main">
+          <div class="url-label">${escHtml(item.label || item.url)}</div>
+          <div class="url-value">${escHtml(item.url)}</div>
+        </div>
+        <div class="url-timeout">${Number(item.timeout_ms || 10000) / 1000}s</div>
+        <button class="btn-detail url-delete" type="button">Löschen</button>
+      </div>`).join('');
+  } catch (err) {
+    list.innerHTML = `<div class="url-empty" style="color:var(--high)">Fehler: ${escHtml(err.message)}</div>`;
+  }
+}
+
+function showUrlResult(type, message) {
+  const result = document.getElementById('url-result');
+  result.className = `notify-result ${type}`;
+  result.textContent = message;
+}
+
+document.getElementById('url-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const labelInput = document.getElementById('url-label');
+  const urlInput = document.getElementById('url-input');
+  const timeoutInput = document.getElementById('url-timeout');
+  const button = e.currentTarget.querySelector('button[type="submit"]');
+
+  button.disabled = true;
+  showUrlResult('info', 'Speichere URL...');
+  try {
+    await apiJson('/monitored-urls', {
+      method: 'POST',
+      body: JSON.stringify({
+        label: labelInput.value,
+        url: urlInput.value,
+        timeout_ms: timeoutInput.value,
+      }),
+    });
+    labelInput.value = '';
+    urlInput.value = '';
+    timeoutInput.value = '10000';
+    showUrlResult('success', 'URL gespeichert. Beim nächsten Check wird sie geprüft.');
+    await loadMonitoredUrls();
+  } catch (err) {
+    showUrlResult('error', 'Fehler: ' + err.message);
+  } finally {
+    button.disabled = false;
+  }
+});
+
+document.getElementById('url-list').addEventListener('click', async (e) => {
+  const row = e.target.closest('.url-row');
+  if (!row) return;
+  const id = row.dataset.id;
+
+  if (e.target.closest('.url-delete')) {
+    try {
+      await apiJson(`/monitored-urls/${id}`, { method: 'DELETE' });
+      showUrlResult('success', 'URL gelöscht.');
+      await loadMonitoredUrls();
+    } catch (err) {
+      showUrlResult('error', 'Fehler: ' + err.message);
+    }
+  }
+});
+
+document.getElementById('url-list').addEventListener('change', async (e) => {
+  const toggle = e.target.closest('.url-toggle');
+  if (!toggle) return;
+  const row = toggle.closest('.url-row');
+  const id = row.dataset.id;
+
+  try {
+    const current = (await api('/monitored-urls')).find((item) => String(item.id) === String(id));
+    if (!current) throw new Error('URL nicht gefunden');
+    await apiJson(`/monitored-urls/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        label: current.label,
+        url: current.url,
+        enabled: toggle.checked,
+        expected_status_min: current.expected_status_min,
+        expected_status_max: current.expected_status_max,
+        timeout_ms: current.timeout_ms,
+      }),
+    });
+    showUrlResult('success', toggle.checked ? 'URL aktiviert.' : 'URL pausiert.');
+    await loadMonitoredUrls();
+  } catch (err) {
+    toggle.checked = !toggle.checked;
+    showUrlResult('error', 'Fehler: ' + err.message);
+  }
+});
 
 // ── Sofort-Check ─────────────────────────────────────────────────────────────
 
@@ -601,5 +799,6 @@ document.getElementById('btn-test-all').addEventListener('click', () => testNoti
 
 loadCronStatus();
 loadDashboard();
+loadMonitoredUrls();
 loadHistory();
 startAutoRefresh(60_000);

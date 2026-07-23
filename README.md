@@ -1,7 +1,7 @@
 # Plesk Server Watchdog
 
 Automatisiertes Monitoring-Tool für Debian-/Plesk-Server.
-Es überwacht Mail-Queue, Mail-Logs, verdächtige PHP-Dateien, Serverlast und WordPress-Installationen, speichert Reports in MySQL und kann optional per KI bewerten, ob echte Maßnahmen nötig sind.
+Es überwacht Mail-Queue, Mail-Logs, verdächtige PHP-Dateien, Serverlast, WordPress-Installationen und frei konfigurierbare URLs, speichert Reports in MySQL und kann optional per KI bewerten, ob echte Maßnahmen nötig sind.
 
 ---
 
@@ -11,6 +11,8 @@ Es überwacht Mail-Queue, Mail-Logs, verdächtige PHP-Dateien, Serverlast und Wo
 - Mail-Queue und Mail-Log automatisch auswerten
 - Verdächtige PHP-Dateien mit Risiko-Score, Hash, Änderungsdatum und WordPress-/Plugin-Kontext aufspüren
 - Alle WordPress-Installationen auf Sicherheits-Plugins, Risiko-Plugins, xmlrpc.php und PHP in Upload-Ordnern prüfen
+- Kritische Webseiten per HTTP-Check auf 500er, Timeouts und DNS-/TLS-Probleme prüfen
+- Incident Mode für read-only Forensik nach vermutetem Einbruch automatisch aktivieren
 - Serverlast im Blick behalten
 - Berichte zentral in MySQL speichern
 - Bei echten Problemen per E-Mail oder Telegram benachrichtigen (mit Trend-Analyse)
@@ -49,10 +51,17 @@ nano .env
 npm run setup-db
 ```
 
-Bei bestehender Installation (Migration für `notifications_sent`-Spalte):
+Bei bestehender Installation:
 
 ```sql
 ALTER TABLE reports ADD COLUMN IF NOT EXISTS notifications_sent JSON DEFAULT NULL;
+ALTER TABLE reports ADD COLUMN IF NOT EXISTS incident JSON DEFAULT NULL;
+```
+
+Danach einmal ausführen, damit die URL-Monitoring-Tabelle angelegt wird:
+
+```bash
+npm run setup-db
 ```
 
 ---
@@ -97,6 +106,11 @@ AI_REVIEW_MIN_RISK=medium
 AI_NOTIFY_MIN_RISK=high
 AI_NOTIFY_COOLDOWN_MINUTES=360
 
+# Incident Mode (read-only)
+ENABLE_INCIDENT_MODE=true
+INCIDENT_OUTPUT_DIR=/root/watchdog-incidents
+INCIDENT_MAX_COPY_FILES=250
+
 # E-Mail Benachrichtigung
 ENABLE_EMAIL_NOTIFIER=false
 SMTP_HOST=mail.example.com
@@ -127,6 +141,52 @@ Der Lauf sollte am Ende ungefähr melden:
 ```
 
 Wenn Checks wegen Berechtigungen fehlschlagen, starte den Watchdog auf dem Server als `root` oder gib passende Leserechte auf Mail-Logs, Plesk-Webspaces und Postfix-Queue.
+
+---
+
+## URL-Erreichbarkeitscheck
+
+Der `urlHealth`-Check prüft URLs, die im Dashboard unter „URL-Monitoring" eingetragen wurden.
+
+Bewertung:
+
+| Befund | Risiko |
+|--------|--------|
+| HTTP 2xx/3xx im erwarteten Bereich | LOW |
+| HTTP 4xx | MEDIUM |
+| HTTP 5xx | HIGH |
+| Timeout, DNS-Fehler, TLS-Fehler, Verbindungsfehler | HIGH |
+
+Standardmäßig gelten HTTP `200-399` als erreichbar. Pro URL kann ein Timeout gesetzt werden. Ein HTTP 500 auf einer überwachten Webseite landet damit direkt im Report und kann über KI-Review, E-Mail und Telegram eskalieren.
+
+---
+
+## Incident Mode
+
+Der Incident Mode startet automatisch, wenn harte Sicherheitsindikatoren erkannt werden, z.B. WordPress-Core-Checksum-Fehler, PHP/PHTML-Dateien in Upload-Verzeichnissen, HIGH/CRITICAL-Funde im Suspicious-Files-Scanner, `eval(base64_decode())`, `gzinflate`, `compress.zlib://`, `php://input`, Include auf Uploads, identische SHA-256-Funde oder Änderungs-Bursts.
+
+Der Modus ist standardmäßig **read-only**. Er löscht, verschiebt und quarantänisiert keine Originaldateien. Verdächtige Dateien werden nur als Evidence-Kopie gesichert.
+
+Evidence-Ordner:
+
+```text
+/root/watchdog-incidents/YYYY-MM-DD_HHMMSS/
+```
+
+Erzeugte Artefakte:
+
+- `incident-summary.txt` — deutschsprachige Zusammenfassung
+- `incident-report.html` — HTML-Bericht
+- `incident.json` — vollständiger strukturierter Incident-Bericht
+- `scan-report.json` — Original-Watchdog-Report
+- `ioc-list.json` — IOC-Gruppen: SHA-256, Dateigröße, Code-Hash, Klassen, Variablen, Base64-Blöcke
+- `file-list.json` — verdächtige Dateien mit SHA-256, Besitzer, Rechten, Größe und Zeitstempeln
+- `timeline.json` — Timeline nach Minute, Stunde und Tag
+- `persistence.json` — Cron/Systemd/authorized_keys/Shell-Profil-Hinweise
+- `quarantine-recommendations.json` — nur Vorschläge, keine automatische Ausführung
+- `files/` — read-only Kopien verdächtiger Dateien
+
+Der Abschlussbericht enthält Anzahl verdächtiger Dateien, Webshell-Muster, veränderte Core-Dateien, betroffene Websites, erste/letzte Aktivität, mögliche Eintrittspunkte, Persistenz-Hinweise und Malware-Kampagnen. Eine Kampagne wird erkannt, wenn derselbe Schadcode, SHA-256 oder Code-Hash auf mehreren Websites auftaucht.
 
 ---
 
@@ -348,6 +408,8 @@ http://127.0.0.1:3000
 **Features:**
 
 - **Auto-Refresh**: Das Dashboard prüft alle 60 Sekunden, ob ein neuer Report vorliegt, und lädt automatisch nach — sichtbar am blinkenden Live-Indikator oben rechts.
+- **URL-Monitoring**: URLs direkt im Dashboard eintragen, pausieren oder löschen. Der nächste Watchdog-Lauf prüft Erreichbarkeit und HTTP-Status.
+- **Incident Mode**: Wenn ein Incident erkannt wurde, zeigt das Dashboard den Evidence-Ordner und die wichtigsten Kennzahlen.
 - **WordPress-Karte**: Alle Installationen werden als aufklappbare Karten angezeigt, mit Risiko-Badge, Security-Plugin-Status und konkreten Befunden (xmlrpc, WP_DEBUG, Risiko-Plugins, PHP in Uploads).
 - **KI-Analyse-Button**: Startet `ai-review.js` manuell und zeigt die Script-Ausgabe live im Dashboard. Nützlich für Tests außerhalb des Cronjob-Zyklus.
 - **Benachrichtigungs-Button**: Sendet manuell eine Test-Benachrichtigung per E-Mail/Telegram mit dem aktuellen Stand.
@@ -394,8 +456,11 @@ Für öffentlichen Zugriff einen Reverse Proxy mit HTTPS und zusätzlicher Zugri
 plesk-server-watchdog/
 ├── monitor.js              # Haupt-Einstiegspunkt, startet alle Checks
 ├── ai-review.js            # KI-Review + Benachrichtigungs-Versand
+├── lib/
+│   ├── db.js               # MySQL-Zugriff
+│   └── incidentMode.js     # Read-only Forensik und Incident-Berichte
 ├── setup-wizard.js         # Interaktiver Installations-Wizard (npm run setup)
-├── setup-db.js             # Legt die reports-Tabelle in MySQL an
+├── setup-db.js             # Legt MySQL-Tabellen an
 ├── package.json
 ├── .env.example
 ├── .gitignore
@@ -406,6 +471,7 @@ plesk-server-watchdog/
 │   ├── suspiciousFiles.js  # PHP-Datei-Scanner mit Kontext-Scoring
 │   ├── serverLoad.js       # CPU/RAM/Disk/Prozesse
 │   ├── wordpressCheck.js   # WordPress-Sicherheitscheck (Plugins, xmlrpc, Uploads)
+│   ├── urlHealth.js        # URL-Erreichbarkeit und HTTP-Status
 │   └── aiReview.js         # OpenAI-Anbindung für KI-Analyse
 ├── notifiers/
 │   ├── emailNotifier.js    # SMTP-Benachrichtigung

@@ -125,6 +125,7 @@ Wichtige Bewertungsregeln:
 - PHP-Dateien im WordPress-Upload-Verzeichnis sind CRITICAL — sofortige manuelle Prüfung notwendig.
 - Risiko-Plugins (WP File Manager etc.) sind HIGH, wenn kein Security-Plugin vorhanden ist.
 - WP_DEBUG=true und xmlrpc.php sind einzeln LOW, in Kombination mit anderen Problemen MEDIUM.
+- URL-Erreichbarkeit: HTTP 500, Timeout, DNS- oder TLS-Fehler sind echte Ausfälle und mindestens HIGH. HTTP 404/403 ist MEDIUM, sofern die URL explizit überwacht wird.
 
 Report:
 ${safe}

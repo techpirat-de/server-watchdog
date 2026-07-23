@@ -404,14 +404,40 @@ ${c.bold}${c.bgBlue}                                                   ${c.reset
           checks             JSON         NOT NULL,
           ai_review          JSON         DEFAULT NULL,
           notifications_sent JSON         DEFAULT NULL,
+          incident           JSON         DEFAULT NULL,
           created_at         TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
           INDEX idx_timestamp (timestamp),
           INDEX idx_risk      (overall_risk)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
       `);
+      const [[incidentColumn]] = await conn.execute(
+        `SELECT COUNT(*) AS count
+         FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE()
+           AND TABLE_NAME = 'reports'
+           AND COLUMN_NAME = 'incident'`
+      );
+      if (!incidentColumn.count) {
+        await conn.execute('ALTER TABLE reports ADD COLUMN incident JSON DEFAULT NULL');
+      }
+      await conn.execute(`
+        CREATE TABLE IF NOT EXISTS monitored_urls (
+          id                  INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+          label               VARCHAR(255) DEFAULT NULL,
+          url                 VARCHAR(2048) NOT NULL,
+          enabled             TINYINT(1) NOT NULL DEFAULT 1,
+          expected_status_min SMALLINT UNSIGNED NOT NULL DEFAULT 200,
+          expected_status_max SMALLINT UNSIGNED NOT NULL DEFAULT 399,
+          timeout_ms          INT UNSIGNED NOT NULL DEFAULT 10000,
+          created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          UNIQUE KEY uniq_url (url(512)),
+          INDEX idx_enabled (enabled)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+      `);
       await conn.end();
       process.stdout.write(`  ${c.green}OK${c.reset}\n`);
-      console.log(ok('Tabelle "reports" bereit'));
+      console.log(ok('Tabellen "reports" und "monitored_urls" bereit'));
     } catch (e) {
       process.stdout.write(`  ${c.yellow}Übersprungen${c.reset}\n`);
       console.log(warn(`DB-Setup fehlgeschlagen: ${e.message}`));

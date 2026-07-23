@@ -188,6 +188,10 @@ function computeTrendDetails(reports) {
   const lastMq  = getCheck(last,  'mailQueue');
   const mqDelta = (lastMq?.metrics?.total || 0) - (firstMq?.metrics?.total || 0);
 
+  const firstUrl = getCheck(first, 'urlHealth');
+  const lastUrl  = getCheck(last,  'urlHealth');
+  const urlFailedDelta = (lastUrl?.metrics?.failed || 0) - (firstUrl?.metrics?.failed || 0);
+
   const changes = [];
 
   if (firstRisk !== lastRisk) {
@@ -203,6 +207,9 @@ function computeTrendDetails(reports) {
 
   if (mqDelta > 5) changes.push(`Mail-Queue um ${mqDelta} Mails gewachsen`);
   if (mqDelta < -5) changes.push(`Mail-Queue um ${Math.abs(mqDelta)} Mails reduziert`);
+
+  if (urlFailedDelta > 0) changes.push(`${urlFailedDelta} URL-Ausfall/Ausfälle neu`);
+  if (urlFailedDelta < 0) changes.push(`${Math.abs(urlFailedDelta)} URL-Ausfall/Ausfälle behoben`);
 
   return {
     firstRisk,

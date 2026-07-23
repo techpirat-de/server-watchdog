@@ -180,7 +180,9 @@ async function findRecentScanFiles(vhostsPath, hours) {
       ')',
       '-mmin', `-${hours * 60}`,
       '-type', 'f',
-      '-not', '-path', '*/.*/*',
+      '-not', '-path', '*/.git/*',
+      '-not', '-path', '*/.svn/*',
+      '-not', '-path', '*/node_modules/*',
     ], { timeout: 30000, maxBuffer: 10 * 1024 * 1024 });
 
     return stdout.split('\n').filter(Boolean);
@@ -219,6 +221,7 @@ function classifyPath(filePath) {
     isKnownWordPressCode: false,
     isSystemTemp: filePath.startsWith('/tmp/') || filePath.startsWith('/var/tmp/') || filePath.startsWith('/dev/shm/'),
     criticalFile: null,
+    isHiddenPath: parts.some((part) => part.startsWith('.') && part !== '.well-known'),
   };
 
   const baseName = path.basename(filePath).toLowerCase();
@@ -646,6 +649,11 @@ async function scanFile(filePath, modifiedCoreFiles, trustedData) {
   if (isLikelyRandomPhpName(filePath) && !context.isLowPriorityCache) {
     addReason(reasons, { label: 'Zufällig wirkender PHP-Dateiname', risk: 'medium', score: 35 });
     score += 35;
+  }
+
+  if (context.isHiddenPath && path.basename(filePath) !== '.htaccess') {
+    addReason(reasons, { label: 'PHP/PHTML-Datei in verstecktem Pfad', risk: 'high', score: 65 });
+    score += 65;
   }
 
   const baseName = path.basename(filePath, path.extname(filePath)).toLowerCase();

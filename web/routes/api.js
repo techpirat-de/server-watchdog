@@ -126,6 +126,44 @@ router.post('/run-now', async (req, res) => {
   });
 });
 
+// ── URL monitoring ───────────────────────────────────────────────────────────
+
+router.get('/monitored-urls', async (req, res) => {
+  try {
+    const urls = await db.getMonitoredUrls();
+    res.json(urls);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/monitored-urls', async (req, res) => {
+  try {
+    const item = await db.addMonitoredUrl(req.body || {});
+    res.json({ ok: true, item });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.put('/monitored-urls/:id', async (req, res) => {
+  try {
+    const item = await db.updateMonitoredUrl(req.params.id, req.body || {});
+    res.json({ ok: true, item });
+  } catch (err) {
+    res.status(err.message === 'URL nicht gefunden' ? 404 : 400).json({ error: err.message });
+  }
+});
+
+router.delete('/monitored-urls/:id', async (req, res) => {
+  try {
+    await db.deleteMonitoredUrl(req.params.id);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(err.message === 'URL nicht gefunden' ? 404 : 400).json({ error: err.message });
+  }
+});
+
 router.post('/test-notify', async (req, res) => {
   const { channel } = req.body;
   if (!channel || !['email', 'telegram', 'all'].includes(channel)) {

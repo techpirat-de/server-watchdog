@@ -8,7 +8,9 @@ const mailLog = require('./checks/mailLog');
 const suspiciousFiles = require('./checks/suspiciousFiles');
 const serverLoad = require('./checks/serverLoad');
 const wordpressCheck = require('./checks/wordpressCheck');
+const urlHealth = require('./checks/urlHealth');
 const db = require('./lib/db');
+const incidentMode = require('./lib/incidentMode');
 
 const RISK_RANK = { low: 0, medium: 1, high: 2, critical: 3 };
 
@@ -18,6 +20,8 @@ const config = {
   MAIL_LOG_PATH:                 process.env.MAIL_LOG_PATH || '/var/log/mail.log',
   VHOSTS_PATH:                   process.env.VHOSTS_PATH || '/var/www/vhosts',
   RECENT_FILE_HOURS:             parseInt(process.env.RECENT_FILE_HOURS, 10) || 24,
+  ENABLE_INCIDENT_MODE:          process.env.ENABLE_INCIDENT_MODE || 'true',
+  INCIDENT_OUTPUT_DIR:           process.env.INCIDENT_OUTPUT_DIR || '/root/watchdog-incidents',
 };
 
 function computeOverallRisk(checks) {
@@ -50,12 +54,20 @@ async function main() {
     console.error(`[monitor] Failed to load mail queue history: ${err.message}`);
   }
 
+  try {
+    config.MONITORED_URLS = await db.getMonitoredUrls({ enabledOnly: true });
+  } catch (err) {
+    config.MONITORED_URLS = [];
+    console.error(`[monitor] Failed to load monitored URLs: ${err.message}`);
+  }
+
   const checks = await Promise.all([
     runCheck('mailQueue', mailQueue.check, config),
     runCheck('mailLog', mailLog.check, config),
     runCheck('suspiciousFiles', suspiciousFiles.check, config),
     runCheck('serverLoad', serverLoad.check),
     runCheck('wordpressCheck', wordpressCheck.check, config),
+    runCheck('urlHealth', urlHealth.check, config),
   ]);
 
   const overallRisk = computeOverallRisk(checks);
@@ -67,7 +79,18 @@ async function main() {
     checks,
     aiReview: null,
     notificationsSent: [],
+    incident: null,
   };
+
+  try {
+    report.incident = await incidentMode.run(report, config);
+    if (report.incident) {
+      console.log(`[monitor] Incident Mode activated — evidence written to ${report.incident.incidentDir}`);
+    }
+  } catch (err) {
+    console.error(`[monitor] Incident Mode failed: ${err.message}`);
+    report.incident = { status: 'error', message: err.message };
+  }
 
   console.log('\n[monitor] ===== RESULTS =====');
   console.log(`[monitor] Overall Risk: ${report.overallRisk.toUpperCase()}`);

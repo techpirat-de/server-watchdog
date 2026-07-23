@@ -61,6 +61,12 @@
       <div class="ai-card" id="ai-card"></div>
     </section>
 
+    <!-- Incident mode -->
+    <section id="incident-section" style="display:none">
+      <h2 class="section-title">Incident Mode</h2>
+      <div class="incident-card" id="incident-card"></div>
+    </section>
+
     <!-- Cron status -->
     <section id="cron-section">
       <h2 class="section-title">Cron-Job Status</h2>
@@ -71,6 +77,26 @@
           <span class="cron-meta" id="cron-meta"></span>
         </div>
         <button class="btn-notify" id="btn-refresh-status" style="margin-left:auto">&#8635; Aktualisieren</button>
+      </div>
+    </section>
+
+    <!-- URL monitoring -->
+    <section>
+      <div class="section-header">
+        <h2 class="section-title">URL-Monitoring</h2>
+        <span class="section-hint">HTTP 500, Timeout und DNS/TLS-Fehler werden als HIGH bewertet.</span>
+      </div>
+      <div class="url-monitor">
+        <form id="url-form" class="url-form">
+          <input type="text" id="url-label" placeholder="Name, z.B. Physiotherapie D-Dorf" autocomplete="off">
+          <input type="url" id="url-input" placeholder="https://www.example.de/" required>
+          <input type="number" id="url-timeout" min="1000" max="60000" step="1000" value="10000" title="Timeout in Millisekunden">
+          <button class="btn-notify" type="submit">URL hinzufügen</button>
+        </form>
+        <div id="url-result" class="notify-result"></div>
+        <div id="url-list" class="url-list">
+          <div class="loading-row">Lade URLs...</div>
+        </div>
       </div>
     </section>
 
