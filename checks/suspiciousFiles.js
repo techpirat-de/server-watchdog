@@ -229,7 +229,12 @@ function classifyPath(filePath) {
     context.criticalFile = baseName;
   }
 
-  if (parts.includes('wp-admin') || parts.includes('wp-includes') || /^wp-[^/]+\.php$/i.test(path.basename(filePath))) {
+  if (
+    parts.includes('wp-admin')
+    || parts.includes('wp-includes')
+    || /^wp-[^/]+\.php$/i.test(path.basename(filePath))
+    || path.basename(filePath).toLowerCase() === 'xmlrpc.php'
+  ) {
     context.area = 'wordpress-core';
     context.isWordPressCore = true;
   }
@@ -421,6 +426,14 @@ function hasCriticalSignalForSecPlugin(reasons) {
   return reasons.some((r) => SECURITY_PLUGIN_ALLOWED_HIGH_CONFIDENCE.has(r.label));
 }
 
+function isVerifiedWordPressCoreFile(context, filePath, modifiedCoreFiles) {
+  return Boolean(
+    context.isWordPressCore
+    && modifiedCoreFiles !== null
+    && !modifiedCoreFiles.has(normalizePath(filePath))
+  );
+}
+
 function applyContextCaps(score, reasons, context, metadata, modifiedCoreFiles, trust) {
   let cappedScore = score;
 
@@ -438,7 +451,7 @@ function applyContextCaps(score, reasons, context, metadata, modifiedCoreFiles, 
   }
 
   if (context.isWordPressCore) {
-    if (modifiedCoreFiles !== null && !modifiedCoreFiles.has(normalizePath(metadata.filePath))) {
+    if (isVerifiedWordPressCoreFile(context, metadata.filePath, modifiedCoreFiles)) {
       // wp-cli confirms file matches official WP — any pattern hit is legitimate code, cap at LOW
       cappedScore = Math.min(cappedScore, riskToMaxScore('low'));
     } else if (modifiedCoreFiles === null) {
@@ -530,10 +543,20 @@ function buildQuarantinePlan(filePath) {
   };
 }
 
+function extractDomainFromPath(filePath) {
+  const parts = normalizePath(filePath).split('/').filter(Boolean);
+  const vhostsIdx = parts.indexOf('vhosts');
+  if (vhostsIdx >= 0 && parts[vhostsIdx + 1]) return parts[vhostsIdx + 1];
+  const httpdocsIdx = parts.indexOf('httpdocs');
+  if (httpdocsIdx >= 1) return parts[httpdocsIdx - 1];
+  return null;
+}
+
 function buildAggregateFindings(scans) {
   const findings = [];
   const relevant = scans.filter((scan) => (
     scan.reasons.length > 0
+    && !scan.verifiedWordPressCore
     && (
       scan.risk !== 'low'
       || scan.context.isUploadLike
@@ -558,14 +581,34 @@ function buildAggregateFindings(scans) {
     .filter(([, group]) => group.length >= 3)
     .sort((a, b) => b[1].length - a[1].length);
   for (const [sha256, group] of repeatedHashes.slice(0, 5)) {
+    const domains = [...new Set(group.map((scan) => extractDomainFromPath(scan.filePath)).filter(Boolean))];
     findings.push({
       type: 'mass_infection_hash',
       risk: 'critical',
       count: group.length,
       sha256,
+      affectedDomains: domains,
       files: group.slice(0, 10).map((scan) => scan.filePath),
       message: `${group.length} verdächtige Dateien haben identischen SHA-256-Hash (${sha256.slice(0, 16)}...). Das kann auf eine verteilte Webshell/Masseninfektion hinweisen.`,
     });
+    if (domains.length >= 2 || group.length >= 10) {
+      const times = group
+        .map((scan) => new Date(scan.metadata.modifiedAt).getTime())
+        .filter(Number.isFinite)
+        .sort((a, b) => a - b);
+      findings.push({
+        type: 'malware_campaign',
+        risk: 'critical',
+        count: group.length,
+        sha256,
+        sizeBytes: group[0]?.metadata?.sizeBytes || null,
+        firstSeen: times[0] ? new Date(times[0]).toISOString() : null,
+        lastSeen: times[times.length - 1] ? new Date(times[times.length - 1]).toISOString() : null,
+        affectedDomains: domains,
+        files: group.slice(0, 10).map((scan) => scan.filePath),
+        message: `Malware-Cluster erkannt: ${group.length} Dateien mit identischem SHA-256${domains.length ? ` auf ${domains.length} Domain(s)` : ''}. Bewertung: sehr wahrscheinlich automatisierter Angriff.`,
+      });
+    }
   }
 
   const repeatedSizes = [...bySize.entries()]
@@ -578,7 +621,7 @@ function buildAggregateFindings(scans) {
       count: group.length,
       sizeBytes: Number(sizeBytes),
       files: group.slice(0, 10).map((scan) => scan.filePath),
-      message: `${group.length} verdächtige Dateien haben exakt ${sizeBytes} Byte. Bitte auf kopierte Malware-Dropper prüfen.`,
+      message: `Dateigruppe identischer Größe: ${sizeBytes} Bytes bei ${group.length} Dateien. Bitte prüfen, ob dies ein Update/Restore oder kopierte Malware-Dropper sind.`,
     });
   }
 
@@ -600,7 +643,7 @@ function buildAggregateFindings(scans) {
       firstModifiedAt: new Date(bestWindow[0].ts).toISOString(),
       lastModifiedAt: new Date(bestWindow[bestWindow.length - 1].ts).toISOString(),
       files: bestWindow.slice(0, 10).map((entry) => entry.scan.filePath),
-      message: `${bestWindow.length} verdächtige Dateien wurden innerhalb von 10 Minuten geändert. Das spricht für automatisierte Veränderung oder Plugin-Massenupdate; bei unbekannten Pfaden sofort prüfen.`,
+      message: `${bestWindow.length} Dateien wurden innerhalb von 10 Minuten geändert. Mögliche Ursachen: WordPress-Update, Plugin-/Theme-Update, Restore oder automatisierte Malware. Wenn kein geplantes Update durchgeführt wurde, Änderungen prüfen.`,
     });
   }
 
@@ -614,6 +657,54 @@ function buildAggregateFindings(scans) {
     }));
 
   return { findings, sizeGroups };
+}
+
+function buildScanSummaryFinding(result, scans, modifiedCoreFiles, aggregates) {
+  const wpInstallations = new Set();
+  let suspiciousCoreFiles = 0;
+  for (const scan of scans) {
+    const domain = extractDomainFromPath(scan.filePath);
+    if (domain && scan.context.isWordPressCore) wpInstallations.add(domain);
+    if (scan.context.isWordPressCore && !scan.verifiedWordPressCore && scan.risk !== 'low') suspiciousCoreFiles++;
+  }
+
+  const massChange = aggregates.findings.some((finding) => finding.type === 'mass_modification_burst');
+  const campaign = aggregates.findings.find((finding) => finding.type === 'malware_campaign');
+  const coreCompromised = modifiedCoreFiles !== null ? modifiedCoreFiles.size > 0 : suspiciousCoreFiles > 0;
+  const recommendation = result.metrics.critical > 0 || result.metrics.high > 0
+    ? 'Manuelle Prüfung erforderlich.'
+    : massChange
+      ? 'Änderungen prüfen, falls kein Update oder Restore geplant war.'
+      : 'Keine akute Maßnahme erforderlich.';
+
+  return {
+    type: 'scan_summary',
+    risk: result.risk,
+    message: [
+      `Gesamt geprüfte Dateien: ${result.metrics.scanned}`,
+      `Verdächtig: ${result.metrics.flagged}`,
+      `Kritisch: ${result.metrics.critical}`,
+      `Hoch: ${result.metrics.high}`,
+      `WordPress Installationen: ${wpInstallations.size || 'unbekannt'}`,
+      `Core kompromittiert: ${coreCompromised ? 'Ja' : 'Nein'}`,
+      `Verdächtige Core-Dateien: ${suspiciousCoreFiles}`,
+      `Massenänderung erkannt: ${massChange ? 'Ja' : 'Nein'}`,
+      `Mögliche Malware-Kampagne: ${campaign ? 'Ja' : 'Nein'}`,
+      `Empfehlung: ${recommendation}`,
+    ].join(' | '),
+    summary: {
+      scanned: result.metrics.scanned,
+      suspicious: result.metrics.flagged,
+      critical: result.metrics.critical,
+      high: result.metrics.high,
+      wordpressInstallations: wpInstallations.size || null,
+      coreCompromised,
+      suspiciousCoreFiles,
+      massChangeDetected: massChange,
+      malwareCampaignPossible: Boolean(campaign),
+      recommendation,
+    },
+  };
 }
 
 async function scanFile(filePath, modifiedCoreFiles, trustedData) {
@@ -717,7 +808,12 @@ async function scanFile(filePath, modifiedCoreFiles, trustedData) {
     // unreadable file — skip silently
   }
 
-  if (context.criticalFile && reasons.length > 0 && !context.isLowPriorityCache) {
+  if (
+    context.criticalFile
+    && reasons.length > 0
+    && !context.isLowPriorityCache
+    && !isVerifiedWordPressCoreFile(context, filePath, modifiedCoreFiles)
+  ) {
     const label = 'Kritische WordPress-/Webserver-Datei mit verdächtigem Muster';
     addReason(reasons, { label, risk: 'high', score: 45, snippet: context.criticalFile });
     addScoreOnce(label, 45);
@@ -733,6 +829,7 @@ async function scanFile(filePath, modifiedCoreFiles, trustedData) {
 
   score = applyContextCaps(score, reasons, context, { ageHours, filePath, configTrustedFile }, modifiedCoreFiles, trust);
   const risk = scoreToRisk(score);
+  const verifiedWordPressCore = isVerifiedWordPressCoreFile(context, filePath, modifiedCoreFiles);
   return {
     filePath,
     risk,
@@ -746,6 +843,7 @@ async function scanFile(filePath, modifiedCoreFiles, trustedData) {
       sizeBytes: stat.size,
     },
     trustedFile:   trust !== null,
+    verifiedWordPressCore,
     configTrustedFile,
     hashVerified:  trust?.hashMatch ?? null,
     hashChanged:   trust ? !trust.hashMatch : false,
@@ -909,7 +1007,14 @@ async function check(config) {
     let coreHeuristicSuppressed = 0;
     let vendorLibSuppressed = 0;
     let configTrustedSuppressed = 0;
+    let verifiedXmlRpcSuppressed = 0;
     for (const scan of scans) {
+      if (scan.verifiedWordPressCore && scan.reasons.length > 0) {
+        coreHeuristicSuppressed++;
+        if (path.basename(scan.filePath).toLowerCase() === 'xmlrpc.php') verifiedXmlRpcSuppressed++;
+        continue;
+      }
+
       if (scan.reasons.length === 0 || scan.risk === 'low') {
         // Count verified core files that had heuristic hits but were capped to LOW
         if (
@@ -977,7 +1082,15 @@ async function check(config) {
       result.findings.push({
         type: 'core_checksum_ok',
         risk: 'low',
-        message: `${coreHeuristicSuppressed} WordPress-Core-Heuristik-Treffer ignoriert (Checksums OK)`,
+        message: `WordPress-Core-Dateien: ${coreHeuristicSuppressed} potentielle Treffer automatisch verworfen, da alle offiziellen WordPress-Checksummen gültig sind.`,
+      });
+    }
+
+    if (verifiedXmlRpcSuppressed > 0) {
+      result.findings.push({
+        type: 'xmlrpc_core_checksum_ok',
+        risk: 'low',
+        message: `xmlrpc.php ist eine WordPress-Core-Datei mit gültiger Checksumme. Analyse als Malware übersprungen. Hinweis: xmlrpc.php serverseitig deaktivieren, wenn sie nicht benötigt wird.`,
       });
     }
 
@@ -1004,6 +1117,8 @@ async function check(config) {
     } else if (result.metrics.flagged > 0) {
       result.status = 'warning';
     }
+
+    result.findings.unshift(buildScanSummaryFinding(result, scans, modifiedCoreFiles, aggregates));
 
   } catch (err) {
     result.status = 'error';

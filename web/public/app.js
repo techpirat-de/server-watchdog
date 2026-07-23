@@ -45,6 +45,23 @@ const PAGE_SIZE = 25;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
+function formatMetricValue(key, value) {
+  if (key === 'sizeGroups' && Array.isArray(value)) {
+    return value
+      .slice(0, 5)
+      .map((group) => `${group.sizeBytes} Bytes: ${group.count} Dateien`)
+      .join(' · ');
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => {
+      if (item && typeof item === 'object') return JSON.stringify(item);
+      return String(item);
+    }).join(', ');
+  }
+  if (value && typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+}
+
 function fmtDate(ts) {
   if (!ts) return '–';
   return new Date(ts).toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short' });
@@ -211,7 +228,7 @@ function renderSuspiciousFilesCard(c) {
 
   const metricsHtml = Object.entries(m).length
     ? `<div class="sf-metrics">${
-        Object.entries(m).map(([k, v]) => `<span class="sf-metric">${escHtml(k)}: <b>${escHtml(String(v))}</b></span>`).join('')
+        Object.entries(m).map(([k, v]) => `<span class="sf-metric">${escHtml(k)}: <b>${escHtml(formatMetricValue(k, v))}</b></span>`).join('')
       }</div>`
     : '';
 
