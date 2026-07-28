@@ -9,11 +9,15 @@ const REJECT_PATTERNS = [
 ];
 
 function parseLine(line) {
+  const lower = line.toLowerCase();
   return {
     isSent: line.includes(' status=sent '),
     isBounced: line.includes(' status=bounced ') || line.includes('bounce'),
     isDeferred: line.includes(' status=deferred '),
-    isRejected: REJECT_PATTERNS.some((p) => line.toLowerCase().includes(p)),
+    isRejected: REJECT_PATTERNS.some((p) => lower.includes(p)),
+    isMicrosoftIpv6PtrError: lower.includes('450 4.7.25')
+      && lower.includes('ipv6')
+      && lower.includes('reverse dns'),
     from: (line.match(/from=<([^>]*)>/) || [])[1] || null,
     to: (line.match(/to=<([^>]*)>/) || [])[1] || null,
   };
@@ -81,6 +85,7 @@ async function check(config) {
       bounced: 0,
       deferred: 0,
       rejected: 0,
+      microsoftIpv6PtrErrors: 0,
       topSenders: {},
       topRecipientDomains: {},
     },
@@ -103,6 +108,7 @@ async function check(config) {
       if (parsed.isBounced) result.metrics.bounced++;
       if (parsed.isDeferred) result.metrics.deferred++;
       if (parsed.isRejected) result.metrics.rejected++;
+      if (parsed.isMicrosoftIpv6PtrError) result.metrics.microsoftIpv6PtrErrors++;
 
       if (parsed.from) {
         result.metrics.topSenders[parsed.from] = (result.metrics.topSenders[parsed.from] || 0) + 1;
@@ -138,6 +144,16 @@ async function check(config) {
       result.risk = result.risk === 'low' ? 'medium' : result.risk;
       result.status = 'warning';
       result.findings.push({ type: 'high_volume', message: `${result.metrics.sent} mails sent in last ${config.CHECK_INTERVAL_MINUTES} min — unusually high` });
+    }
+
+    if (result.metrics.microsoftIpv6PtrErrors > 0) {
+      if (result.metrics.microsoftIpv6PtrErrors > 20 && result.risk === 'low') result.risk = 'medium';
+      result.status = result.status === 'ok' ? 'warning' : result.status;
+      result.findings.push({
+        type: 'microsoft_ipv6_reverse_dns',
+        risk: result.metrics.microsoftIpv6PtrErrors > 20 ? 'medium' : 'low',
+        message: `${result.metrics.microsoftIpv6PtrErrors} Microsoft/Outlook-Ablehnung wegen fehlendem Reverse-DNS für IPv6. Kein Malware-Hinweis; PTR bei Provider setzen oder Postfix bevorzugt über IPv4 senden lassen.`,
+      });
     }
 
   } catch (err) {

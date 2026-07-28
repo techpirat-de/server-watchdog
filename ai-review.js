@@ -4,6 +4,7 @@ require('dotenv').config({ override: true });
 const aiReview = require('./checks/aiReview');
 const emailNotifier = require('./notifiers/emailNotifier');
 const telegramNotifier = require('./notifiers/telegramNotifier');
+const { isQuarantinePath, fileStillExists } = require('./lib/quarantinePaths');
 
 const RISK_RANK = { low: 0, medium: 1, high: 2, critical: 3 };
 
@@ -127,13 +128,113 @@ async function getRecentSentChannels({ sinceMinutes }) {
 
 // ── Shared AI review input ───────────────────────────────────────────────────
 
+function normalizeRisk(risk) {
+  return ['low', 'medium', 'high', 'critical'].includes(risk) ? risk : 'low';
+}
+
+function recomputeCheckRisk(findings) {
+  let risk = 'low';
+  for (const finding of findings || []) {
+    const findingRisk = normalizeRisk(finding.risk);
+    if (RISK_RANK[findingRisk] > RISK_RANK[risk]) risk = findingRisk;
+  }
+  return risk;
+}
+
+function recomputeOverallRisk(checks) {
+  let risk = 'low';
+  for (const check of checks || []) {
+    const checkRisk = normalizeRisk(check.risk);
+    if (RISK_RANK[checkRisk] > RISK_RANK[risk]) risk = checkRisk;
+  }
+  return risk;
+}
+
+function classifyFindingFileState(finding) {
+  const files = [];
+  if (finding.file) files.push(finding.file);
+  if (Array.isArray(finding.files)) files.push(...finding.files);
+  const unique = [...new Set(files.filter(Boolean))];
+  if (unique.length === 0) return { stale: false, quarantined: false, activeFiles: [] };
+
+  const activeFiles = unique.filter((file) => !isQuarantinePath(file) && fileStillExists(file));
+  const quarantined = unique.some((file) => isQuarantinePath(file));
+  const missing = unique.some((file) => !isQuarantinePath(file) && !fileStillExists(file));
+
+  return {
+    stale: activeFiles.length === 0 && (quarantined || missing),
+    quarantined,
+    missing,
+    activeFiles,
+    files: unique,
+  };
+}
+
+function sanitizeStaleFileFinding(finding) {
+  const state = classifyFindingFileState(finding);
+  if (!state.stale) return { finding, suppressed: false };
+
+  const message = state.quarantined
+    ? `Datei bereits in Quarantäne: ${state.files.join(', ')}. Kein weiterer Handlungsbedarf.`
+    : `Datei nicht mehr im aktiven Pfad vorhanden: ${state.files.join(', ')}. Vermutlich bereits entfernt oder quarantänisiert. Kein weiterer Handlungsbedarf.`;
+
+  return {
+    suppressed: true,
+    finding: {
+      ...finding,
+      type: 'file_already_handled',
+      risk: 'low',
+      message,
+      stale: true,
+      quarantined: state.quarantined,
+      originalType: finding.type,
+      originalRisk: finding.risk,
+    },
+  };
+}
+
+function sanitizeReportForCurrentFilesystem(report) {
+  const checks = (report.checks || []).map((check) => {
+    let suppressed = 0;
+    const findings = (check.findings || []).map((finding) => {
+      const result = sanitizeStaleFileFinding(finding);
+      if (result.suppressed) suppressed++;
+      return result.finding;
+    });
+    if (suppressed === 0) return check;
+
+    const risk = recomputeCheckRisk(findings);
+    return {
+      ...check,
+      risk,
+      status: risk === 'low' ? 'ok' : (risk === 'medium' ? 'warning' : 'error'),
+      findings,
+      metrics: {
+        ...(check.metrics || {}),
+        ...(suppressed > 0 ? { staleFileFindingsSuppressed: suppressed } : {}),
+      },
+    };
+  });
+
+  return {
+    ...report,
+    checks,
+    overall_risk: recomputeOverallRisk(checks),
+    overallRisk: recomputeOverallRisk(checks),
+  };
+}
+
 function buildHourlyReport(reports, worstRisk) {
   const latestReport = reports[reports.length - 1];
+  const currentWorstRisk = reports.reduce((worst, report) => {
+    const risk = normalizeRisk(report.overall_risk || report.overallRisk);
+    return RISK_RANK[risk] > RISK_RANK[worst] ? risk : worst;
+  }, 'low');
 
   return {
     timestamp: new Date().toISOString(),
     hostname: config.SERVER_NAME,
-    overallRisk: worstRisk,
+    overallRisk: currentWorstRisk || worstRisk,
     reportWindow: {
       label: 'last_hour',
       reportCount: reports.length,
@@ -316,8 +417,10 @@ async function main() {
     process.exit(0);
   }
 
+  const currentReports = reports.map(sanitizeReportForCurrentFilesystem);
+
   // Determine worst risk in the last hour
-  const worstRisk = reports.reduce((worst, r) => {
+  const worstRisk = currentReports.reduce((worst, r) => {
     return RISK_RANK[r.overall_risk] > RISK_RANK[worst] ? r.overall_risk : worst;
   }, 'low');
 
@@ -332,7 +435,7 @@ async function main() {
     console.log('[ai-review] Force mode — running AI analysis despite LOW risk');
   }
 
-  const hourlyReport = buildHourlyReport(reports, worstRisk);
+  const hourlyReport = buildHourlyReport(currentReports, worstRisk);
   const aiConfig = {
     ...config,
     AI_REVIEW_MIN_RISK: force ? 'low' : config.AI_REVIEW_MIN_RISK,
@@ -354,11 +457,11 @@ async function main() {
   console.log(`[ai-review] Summary: ${aiResult.summary}`);
 
   // Write AI result to the most recent report in DB
-  const latestReport = reports[reports.length - 1];
+  const latestReport = currentReports[currentReports.length - 1];
   await updateAiReview(latestReport.id, { status: 'ok', risk: aiResult.risk, findings: aiCheck.findings, response: aiResult });
   console.log(`[ai-review] AI result saved to report id=${latestReport.id}`);
 
-  const trendDetails = computeTrendDetails(reports);
+  const trendDetails = computeTrendDetails(currentReports);
   if (trendDetails?.changes.length) {
     console.log(`[ai-review] Trend: ${trendDetails.stable ? 'stable' : trendDetails.improved ? 'improving' : 'worsening'} — ${trendDetails.changes.join(', ')}`);
   }
@@ -377,7 +480,14 @@ async function main() {
   process.exit(0);
 }
 
-main().catch((err) => {
-  console.error('[ai-review] Fatal error:', err);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((err) => {
+    console.error('[ai-review] Fatal error:', err);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  sanitizeReportForCurrentFilesystem,
+  buildHourlyReport,
+};

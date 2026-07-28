@@ -83,6 +83,8 @@ RECENT_FILE_HOURS=24
 # Komma-getrennte zusätzliche Pfad-Fragmente, die ignoriert werden sollen
 # Standardmäßig bereits ignoriert: /wp-content/wflogs/, /wp-content/uploads/cache/
 SUSPICIOUS_FILES_EXCLUDE=
+# Zusätzliche Quarantäne-Pfade, die nie als aktive Malware gemeldet werden
+SUSPICIOUS_FILES_QUARANTINE_EXCLUDE=
 
 # MySQL Datenbank
 DB_HOST=127.0.0.1
@@ -237,8 +239,16 @@ Der PHP-Datei-Scanner ist eine Heuristik und kein Malware-Beweis. Der Scanner be
 **Ignorierte Pfade (Standard):**
 - `/wp-content/wflogs/` (Wordfence-Logs)
 - `/wp-content/uploads/cache/`
+- `.quarantined`
+- `/root/physio-malware-*`
+- `/root/server-malware-*`
+- `/root/server-watchdog-quarantine/`
+- `/root/watchdog-incidents/`
 
 Weitere Ausschlüsse können via `SUSPICIOUS_FILES_EXCLUDE` (kommagetrennte Pfadteile) konfiguriert werden.
+Weitere Quarantänepfade können via `SUSPICIOUS_FILES_QUARANTINE_EXCLUDE` ergänzt werden.
+
+Vor jeder Meldung wird geprüft, ob die Datei noch im aktiven Pfad existiert. Alte Findings aus vorherigen Reports werden im AI-Review zu INFO/LOW herabgestuft, wenn die Datei inzwischen entfernt oder in Quarantäne verschoben wurde.
 
 Zusätzliche Abwertung ohne harte Ignorierung:
 
@@ -283,6 +293,8 @@ Richtwerte:
 | >500 | Kritisch |
 
 Eine leicht erhöhte Queue führt nur dann zu einer höheren Bewertung, wenn sie wächst oder zusätzliche Fehler wie Bounces, Rate Limits oder Block-Meldungen auftreten.
+
+Microsoft/Outlook-Fehler wie `450 4.7.25 sending IPv6 address must have reverse DNS record` werden separat als Mail-Konfigurationsproblem gemeldet. Das ist kein Malware-Hinweis. Empfohlene Maßnahmen: IPv6-PTR beim Provider setzen oder Postfix so konfigurieren, dass ausgehende Mails bevorzugt über IPv4 gesendet werden.
 
 ---
 

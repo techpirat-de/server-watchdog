@@ -118,6 +118,7 @@ Wichtige Bewertungsregeln:
 - Zufallsähnliche PHP-Dateinamen in Webroots sind hohes Risiko, besonders wenn sie groß, obfuskiert oder kürzlich geändert sind.
 - Unbekannte Shell-User, unerwartete Cronjobs und Cronjobs auf gelöschte Projekte sind mittleres bis hohes Risiko.
 - SMTP-Auth-Fehler für nicht existierende User sind normales Internet-Grundrauschen, außer es gibt erfolgreiche Logins oder sehr hohe Raten.
+- Microsoft/Outlook "450 4.7.25 sending IPv6 address must have reverse DNS record" ist ein Mail-Konfigurationsproblem (fehlender IPv6-PTR), kein Malware-Hinweis. Empfehlung: Reverse-DNS beim Provider setzen oder Postfix auf IPv4 priorisieren.
 - Meldungen wie "delivery temporarily suspended", "user over quota" und "mailbox temporarily disabled" sind niedriger zu bewerten, wenn sie alte Queue-Retries betreffen.
 - Bevorzuge LOW, wenn Queue leer ist, keine verdächtigen Prozesse existieren und Datei-Scans sauber sind.
 - Gib klare Handlungsempfehlungen für Administratoren. Empfiehl manuelle Prüfung vor destruktiven Aktionen. Keine blinde Löschung ohne Backup empfehlen, außer der Report identifiziert bestätigte Malware.

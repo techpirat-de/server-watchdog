@@ -9,6 +9,7 @@ const readline = require('readline');
 
 const execFileAsync = promisify(execFile);
 const { load: loadTrustedFiles, checkTrust } = require('../lib/trustedFiles');
+const { isQuarantinePath, quarantinePatterns, fileStillExists } = require('../lib/quarantinePaths');
 
 const PHP_BINARY_CANDIDATES = [
   '/opt/plesk/php/8.3/bin/php',
@@ -83,6 +84,7 @@ const TEMP_PATH_FRAGMENTS = [
 const DEFAULT_EXCLUDES = [
   '/wp-content/wflogs/',
   '/wp-content/uploads/cache/',
+  '/.quarantined/',
 ];
 const LOW_PRIORITY_CACHE_PARTS = [
   'wflogs',
@@ -161,7 +163,7 @@ function getTrustedFileFragments() {
 
 function isExcluded(filePath, excludeList) {
   const normalized = normalizePath(filePath);
-  return excludeList.some((pattern) => normalized.includes(normalizePath(pattern)));
+  return isQuarantinePath(filePath) || excludeList.some((pattern) => normalized.includes(normalizePath(pattern)));
 }
 
 function isConfiguredTrustedFile(filePath) {
@@ -183,6 +185,11 @@ async function findRecentScanFiles(vhostsPath, hours) {
       '-not', '-path', '*/.git/*',
       '-not', '-path', '*/.svn/*',
       '-not', '-path', '*/node_modules/*',
+      '-not', '-path', '*/.quarantined/*',
+      '-not', '-path', '/root/physio-malware-*/*',
+      '-not', '-path', '/root/server-malware-*/*',
+      '-not', '-path', '/root/server-watchdog-quarantine/*',
+      '-not', '-path', '/root/watchdog-incidents/*',
     ], { timeout: 30000, maxBuffer: 10 * 1024 * 1024 });
 
     return stdout.split('\n').filter(Boolean);
@@ -708,6 +715,9 @@ function buildScanSummaryFinding(result, scans, modifiedCoreFiles, aggregates) {
 }
 
 async function scanFile(filePath, modifiedCoreFiles, trustedData) {
+  if (isQuarantinePath(filePath) || !fileStillExists(filePath)) {
+    return null;
+  }
   const reasons = [];
   const context = classifyPath(filePath);
   const stat = await fs.promises.stat(filePath);
@@ -986,6 +996,7 @@ async function check(config) {
     const excluded = allFiles.length - files.length;
     result.metrics.scanned = files.length;
     if (excluded > 0) result.metrics.excluded = excluded;
+    result.metrics.quarantineExcludePatterns = quarantinePatterns();
 
     const modifiedCoreFiles = await collectModifiedCoreFiles(vhostsPath);
     if (modifiedCoreFiles !== null) {
@@ -1000,7 +1011,7 @@ async function check(config) {
     if (trustedPluginCount > 0) result.metrics.configTrustedPlugins = trustedPluginCount;
     if (trustedFileCount > 0) result.metrics.configTrustedFiles = trustedFileCount;
 
-    const scans = await Promise.all(files.map((f) => scanFile(f, modifiedCoreFiles, trustedData)));
+    const scans = (await Promise.all(files.map((f) => scanFile(f, modifiedCoreFiles, trustedData)))).filter(Boolean);
     const aggregates = buildAggregateFindings(scans);
     if (aggregates.sizeGroups.length > 0) result.metrics.sizeGroups = aggregates.sizeGroups;
 
